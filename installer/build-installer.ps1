@@ -2,13 +2,12 @@
 #  build-installer.ps1
 #  Compila o stub GuttyAgenteSetup.exe via Inno Setup.
 #
-#  Pre-requisitos (instalar uma vez):
-#    1. Inno Setup 6:    choco install innosetup -y
-#                        ou: https://jrsoftware.org/isdl.php
-#    2. Inno Download Plugin (IDP):
-#                        choco install innosetup-idp -y
-#                        ou: https://mitrich.net23.net/?/inno-download-plugin/
-#                        (descompacte e copie idp*.* pra C:\Program Files (x86)\Inno Setup 6\)
+#  Pre-requisito (instalar uma vez):
+#    Inno Setup 6.1 ou mais novo: choco install innosetup -y
+#                                  ou: https://jrsoftware.org/isdl.php
+#
+#  Nao precisa de plugin externo — usamos CreateDownloadPage() nativo
+#  do Inno Setup 6.1+ (WinHTTP embutido).
 #
 #  Uso:
 #    powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
@@ -38,23 +37,10 @@ if (-not $iscc) {
   Write-Host "ERRO: Inno Setup 6 nao encontrado." -ForegroundColor Red
   Write-Host ""
   Write-Host "Instale com Chocolatey:"
-  Write-Host "  choco install innosetup innosetup-idp -y"
+  Write-Host "  choco install innosetup -y"
   Write-Host ""
   Write-Host "Ou baixe de:"
   Write-Host "  https://jrsoftware.org/isdl.php"
-  Write-Host "  https://mitrich.net23.net/?/inno-download-plugin/"
-  Write-Host ""
-  exit 1
-}
-
-# Verifica que o plugin IDP esta no diretorio do Inno Setup
-$innoDir = Split-Path $iscc -Parent
-$idpPath = Join-Path $innoDir 'idp.iss'
-if (-not (Test-Path $idpPath)) {
-  Write-Host ""
-  Write-Host "AVISO: idp.iss nao encontrado em $innoDir" -ForegroundColor Yellow
-  Write-Host "O stub usa Inno Download Plugin pra baixar o payload em runtime."
-  Write-Host "Instale:  choco install innosetup-idp -y"
   Write-Host ""
   exit 1
 }
@@ -91,7 +77,7 @@ if (Test-Path $out) {
   Write-Host "OK -> $out ($sizeMb MB)" -ForegroundColor Green
   Write-Host ""
   Write-Host "Proximos passos:"
-  Write-Host "  1) Subir bin\agente-payload.zip pro GitHub Releases (tag 'tef-installer-latest')"
+  Write-Host "  1) Subir bin\agente-payload.zip pro GitHub Releases (tag 'latest')"
   Write-Host "  2) Subir bin\GuttyAgenteSetup.exe pro mesmo release"
   Write-Host "  3) PDV ja resolve a URL via /api/tef/installer/info"
 } else {
