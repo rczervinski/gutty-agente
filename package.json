@@ -15,6 +15,9 @@
     "pack:payload": "node pack.js",
     "pack:installer": "powershell -ExecutionPolicy Bypass -File installer/build-installer.ps1",
     "pack": "npm run pack:payload && npm run pack:installer",
+    "test:installer": "node dev-local.js",
+    "test:installer:fast": "node dev-local.js --fast",
+    "run:exe": "powershell -NoProfile -Command \"& '.\\bin\\GuttyAgente-win32-x64\\GuttyAgente.exe'\"",
     "deploy:release": "node deploy-to-public.js"
   },
   "dependencies": {
