@@ -29,9 +29,9 @@ export async function instalar(
   if (process.platform !== 'win32') {
     return { ok: false, erro: 'Instalador suporta apenas Windows' };
   }
-  if (!isAdmin()) {
-    return { ok: false, erro: 'Instalador precisa rodar como Administrador' };
-  }
+  // Nao verifica isAdmin aqui — a elevacao e feita pelo helper em
+  // elevate.ts (instalarComElevacao). Quando este orquestrador roda,
+  // ele *ja* esta no contexto elevado (ou o app foi aberto como admin).
 
   const TOTAL = 5;
   try {

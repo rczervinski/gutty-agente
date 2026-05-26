@@ -18,20 +18,29 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
 import type { AmbienteApi, PairConfig, ProgressoInstalacao } from './shared-types';
 import { buscarConfigPosLogin, consumirToken, login } from './install/api';
-import { instalar, isAdmin } from './install/orquestrador';
+import { isAdmin } from './install/orquestrador';
+import { instalarComElevacao, processarFlagInstalacaoElevada } from './install/elevate';
 import { criarTray, tudoQueremSair } from './tray';
+
+// =====================================================================
+// Modo "helper elevado": se foi invocado com --install-tef <cfg>,
+// roda a instalacao e sai. NAO cria janela nem tray.
+// (Esse processo e o que sobe via UAC quando o user clica em Instalar.)
+// =====================================================================
+const ehHelperElevado = processarFlagInstalacaoElevada();
 
 const VERSAO_APP = '1.0.0';
 
 let mainWindow: BrowserWindow | null = null;
 
 // ---------------------------------------------------------------------
-// Single instance
+// Single instance — pulado quando rodando como helper elevado, porque
+// o app principal (user) ja tem o lock.
 // ---------------------------------------------------------------------
-const gotLock = app.requestSingleInstanceLock();
+const gotLock = ehHelperElevado ? true : app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
-} else {
+} else if (!ehHelperElevado) {
   app.on('second-instance', () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -131,6 +140,9 @@ function criarJanela(): void {
 // ---------------------------------------------------------------------
 
 app.whenReady().then(() => {
+  // Modo helper elevado: nao cria UI, deixa o elevate.ts cuidar.
+  if (ehHelperElevado) return;
+
   registrarIpcHandlers();
   criarTray(() => mainWindow);
 
@@ -176,7 +188,10 @@ function registrarIpcHandlers(): void {
     const emit = (p: ProgressoInstalacao): void => {
       mainWindow?.webContents.send('gutty:progresso', p);
     };
-    return instalar(config, tenantId, emit);
+    // Se ja for admin, instala in-process. Caso contrario, eleva via UAC
+    // spawnando uma copia do GuttyAgente.exe com --install-tef. O dialog
+    // UAC aparece sem precisar fechar/reabrir o app.
+    return instalarComElevacao(config, tenantId, emit, isAdmin());
   });
 
   // --- Janela ---
