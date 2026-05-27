@@ -57,6 +57,7 @@ const bridge: GuttyBridge = {
   tefStatus: () => ipcRenderer.invoke('gutty:tefStatus') as Promise<StatusTefSnapshot>,
   tefReinstalar: (config: PairConfig, tenantId: string) =>
     ipcRenderer.invoke('gutty:tefReinstalar', config, tenantId) as Promise<InstalacaoResultado>,
+  tefDiagnostico: () => ipcRenderer.invoke('gutty:tefDiagnostico') as Promise<string>,
 };
 
 contextBridge.exposeInMainWorld('gutty', bridge);

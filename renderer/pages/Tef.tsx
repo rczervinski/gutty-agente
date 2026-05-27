@@ -119,7 +119,7 @@ export function TefPage(): JSX.Element {
           <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-5">
             <p className="text-red-800 text-sm font-mono whitespace-pre-wrap">{resultado.erro}</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button
               onClick={() => void carregarStatus()}
               className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 rounded-md text-sm font-medium"
@@ -132,6 +132,7 @@ export function TefPage(): JSX.Element {
             >
               Reinstalar do zero
             </button>
+            <BotaoCopiarDiagnostico />
           </div>
         </Card>
       )}
@@ -202,11 +203,12 @@ function DiagnosticoView({
           <p className="text-xs font-semibold text-amber-900 uppercase tracking-wider mb-1">
             Detalhes
           </p>
-          <ul className="text-sm text-amber-900 space-y-1">
+          <ul className="text-sm text-amber-900 space-y-1 mb-3">
             {status.problemas.map((p, i) => (
               <li key={i}>- {p}</li>
             ))}
           </ul>
+          <BotaoCopiarDiagnostico />
         </div>
       )}
 
@@ -243,6 +245,36 @@ function DiagnosticoView({
         </p>
       )}
     </Card>
+  );
+}
+
+function BotaoCopiarDiagnostico(): JSX.Element {
+  const [estado, setEstado] = useState<'idle' | 'coletando' | 'copiado'>('idle');
+
+  async function copiar(): Promise<void> {
+    setEstado('coletando');
+    try {
+      const txt = await window.gutty.tefDiagnostico();
+      await navigator.clipboard.writeText(txt);
+      setEstado('copiado');
+      setTimeout(() => setEstado('idle'), 2500);
+    } catch {
+      setEstado('idle');
+    }
+  }
+
+  return (
+    <button
+      onClick={() => void copiar()}
+      disabled={estado === 'coletando'}
+      className="text-xs px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-md text-slate-700 transition"
+    >
+      {estado === 'coletando'
+        ? 'Coletando...'
+        : estado === 'copiado'
+        ? 'Copiado! Cole no suporte'
+        : 'Copiar diagnostico'}
+    </button>
   );
 }
 

@@ -142,6 +142,9 @@ export interface GuttyBridge {
   tefStatus(): Promise<StatusTefSnapshot>;
   /** Reset completo + instalacao do zero. Eleva via UAC se preciso. */
   tefReinstalar(config: PairConfig, tenantId: string): Promise<InstalacaoResultado>;
+  /** Coleta diagnostico completo (porta 443, log do agente, eventos) e
+   *  retorna o texto pra o user colar pro suporte. */
+  tefDiagnostico(): Promise<string>;
 }
 
 declare global {

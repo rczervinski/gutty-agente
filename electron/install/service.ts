@@ -8,7 +8,28 @@ function estaStopped(stdout: string): boolean {
   return /\bSTOPPED\b/.test(stdout);
 }
 
+/**
+ * DESABILITA o auto-restart do SCM. Sem isso, se o servico crasha,
+ * o Windows reinicia ele em loop — criando ilusao de "2 processos" e
+ * mascarando a causa real (servico nem deveria estar conseguindo subir).
+ *
+ * Com auto-restart desabilitado: se subir uma vez e crashar, fica
+ * STOPPED visivelmente. Diagnostico mais facil.
+ */
+export async function desabilitarAutoRestart(): Promise<void> {
+  // sc failure <nome> reset= 0 actions=
+  // (espaco APOS "=" e obrigatorio na sintaxe do sc.exe)
+  await exec(
+    'sc.exe',
+    ['failure', SERVICE_NAME, 'reset=', '0', 'actions=', ''],
+    { ignoreErr: true }
+  );
+}
+
 export async function iniciarServico(): Promise<void> {
+  // Desabilita restart auto pra crashes ficarem visiveis (ver helper acima).
+  await desabilitarAutoRestart();
+
   let q;
   for (let i = 0; i < 5; i++) {
     q = await exec('sc.exe', ['query', SERVICE_NAME]);

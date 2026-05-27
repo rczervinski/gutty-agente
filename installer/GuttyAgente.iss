@@ -107,6 +107,9 @@ Filename: "{cmd}"; Parameters: "/c taskkill /F /IM {#MyAppExeName} & exit /b 0";
   Flags: runhidden; RunOnceId: "killguttyagente"
 
 [UninstallDelete]
+; Apaga dados do app (sessao salva em DPAPI, cache do Chromium, etc).
+; O Electron usa app.getPath('userData') = %APPDATA%\<productName>\.
+Type: filesandordirs; Name: "{userappdata}\{#MyAppName}"
 Type: filesandordirs; Name: "{app}\resources"
 Type: filesandordirs; Name: "{app}\locales"
 Type: files;          Name: "{app}\{#MyAppExeName}"

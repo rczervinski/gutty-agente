@@ -278,6 +278,48 @@ function registrarIpcHandlers(): void {
     }
   );
 
+  ipcMain.handle('gutty:tefDiagnostico', async (): Promise<string> => {
+    // Importacao tardia pra evitar carregar tudo no boot
+    const { coletarDiagnostico } = await import('./install/diagnostico');
+    const { verificarStatusTef } = await import('./install/status');
+    const status = await verificarStatusTef();
+    const diag = await coletarDiagnostico();
+    const linhas: string[] = [
+      '=== GUTTY AGENTE — DIAGNOSTICO TEF ===',
+      `gerado em: ${new Date().toISOString()}`,
+      '',
+      '--- STATUS ---',
+      `tudoOk: ${status.tudoOk}`,
+      `pastaInstalada: ${status.detalhes.pastaInstalada}`,
+      `servicoExiste: ${status.detalhes.servicoExiste}`,
+      `servicoRodando: ${status.detalhes.servicoRodando}`,
+      `processosAtivos: ${status.detalhes.processosAtivos}`,
+      `httpsResponde: ${status.detalhes.httpsResponde}`,
+      `dllInicializada: ${status.detalhes.dllInicializada}`,
+      `versaoAgente: ${status.detalhes.versaoAgente ?? '?'}`,
+      `versaoClisitef: ${status.detalhes.versaoClisitef ?? '?'}`,
+      '',
+      '--- PROBLEMAS ---',
+      ...status.problemas.map((p) => `  - ${p}`),
+      '',
+      '--- PORTA 443 ---',
+      `ocupada: ${diag.porta443.ocupada}`,
+      `processo: ${diag.porta443.processo ?? '(nenhum)'}`,
+      `pid: ${diag.porta443.pid ?? '-'}`,
+      `ehAgenteNosso: ${diag.porta443.ehNosso}`,
+      '',
+      '--- SERVICO (sc qc) ---',
+      diag.servicoConfig ?? '(nao disponivel)',
+      '',
+      '--- LOG DO AGENTE (ultimas linhas) ---',
+      diag.logTrecho ?? '(nao encontrado)',
+      '',
+      '--- EVENT LOG ---',
+      diag.eventosRecentes ?? '(sem eventos relacionados)',
+    ];
+    return linhas.join('\n');
+  });
+
   // --- Janela ---
   ipcMain.handle('gutty:minimizarPraTray', () => {
     mainWindow?.hide();

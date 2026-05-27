@@ -21,6 +21,7 @@ import { exec, sleep } from './util';
 import { SERVICE_NAME } from './paths';
 import { verificarStatusTef } from './status';
 import { coletarDiagnostico } from './diagnostico';
+import { desabilitarAutoRestart } from './service';
 import type { StatusTefSnapshot } from '../shared-types';
 
 type EmitLabel = (label: string, detalhe?: string) => void;
@@ -41,8 +42,11 @@ async function pararServico(): Promise<void> {
 }
 
 async function iniciarServicoForce(): Promise<boolean> {
-  // Garante auto-start (caso o `-i` da SE nao tenha configurado)
+  // Garante auto-start no boot + desabilita restart automatico do SCM
+  // (sem isso, crashes do agente sao mascarados por um restart loop e
+  // o user ve "2 processos pulando" em vez do erro real).
   await exec('sc.exe', ['config', SERVICE_NAME, 'start=', 'auto'], { ignoreErr: true });
+  await desabilitarAutoRestart();
   await exec('sc.exe', ['start', SERVICE_NAME], { ignoreErr: true });
   for (let i = 0; i < 15; i++) {
     const q = await exec('sc.exe', ['query', SERVICE_NAME], { ignoreErr: true });
@@ -85,8 +89,18 @@ export async function garantirSaudeAgente(
     );
 
     if (status.detalhes.httpsResponde && problemasInfra.length === 0) {
-      // Servico + processo + HTTPS verdes. Pode faltar so a DLL (SitDemo).
-      return status;
+      // Saude aparente. ANTES de devolver OK, faz validacao dupla: espera
+      // 5s e re-verifica. Se o servico crashar nesse intervalo, sabemos
+      // que esta com problema (auto-restart desabilitado garante que
+      // STOPPED fica visivel — sem isso o crash era mascarado).
+      emit('Verificando estabilidade (5s)...');
+      await sleep(5000);
+      const reCheck = await verificarStatusTef();
+      if (reCheck.detalhes.httpsResponde && reCheck.detalhes.servicoRodando) {
+        return reCheck;
+      }
+      emit('Servico caiu apos start — vou tentar de novo...');
+      status = reCheck;
     }
 
     if (tentativa === MAX_TENTATIVAS) break;
