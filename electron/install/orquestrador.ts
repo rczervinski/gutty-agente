@@ -13,6 +13,7 @@ import { configurarAgente } from './configure';
 import { gerarCertificadosEServico } from './certs';
 import { iniciarServico } from './service';
 import { limparZumbis } from './reset';
+import { adicionarExclusoesDefender } from './defender';
 import { garantirSaudeAgente, gerarMensagemErro } from './garantir-saude';
 import type { InstalacaoResultado, PairConfig, ProgressoInstalacao } from '../shared-types';
 
@@ -41,6 +42,14 @@ export async function instalar(
 
   const TOTAL = 6;
   try {
+    // 0) EXCLUSAO DEFENDER — CRITICO. A CliSiTef64I.dll (38MB, sem
+    // assinatura) e detectada como heuristica (ThreatID 2147939874) e
+    // quarentinada pelo Defender ANTES mesmo do agente conseguir usar.
+    // Confirmado por Get-MpThreatDetection em PC real. Sem essa exclusao
+    // toda instalacao termina com 'DLL ausente'.
+    emit({ passo: 1, total: TOTAL, label: 'Adicionando excecoes no Windows Defender...' });
+    await adicionarExclusoesDefender();
+
     // 1) Limpeza preventiva — APENAS processos e servico (nao-destrutivo).
     //
     // IMPORTANTE: NAO apaga arquivos aqui. Antes apagavamos a pasta toda
