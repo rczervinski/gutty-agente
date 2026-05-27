@@ -82,6 +82,25 @@ export interface StatusTefSnapshot {
     versaoAgente?: string;
     versaoClisitef?: string;
   };
+  /** Problemas externos (Defender ativo, porta 443 ocupada, etc) */
+  externo?: ProblemaExternoSnapshot;
+}
+
+export interface ProblemaExternoSnapshot {
+  defender: {
+    ativo: boolean;
+    pastaExcluida: boolean;
+    quarentenaDetectada: boolean;
+    vaiAtrapalhar: boolean;
+  };
+  porta443: {
+    livre: boolean;
+    processoOutro?: string;
+    bloqueada: boolean;
+  };
+  sitdemo: {
+    rodando: boolean;
+  };
 }
 
 /**

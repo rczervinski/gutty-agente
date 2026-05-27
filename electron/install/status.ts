@@ -18,12 +18,15 @@ import { join } from 'node:path';
 import { AGENT_BIN, AGENT_EXE, INSTALL_DIR, SERVICE_NAME } from './paths';
 import { exec, pwsh } from './util';
 import { validarAgente } from './validate';
+import { coletarDiagnosticoExterno, type DiagnosticoExterno } from './diagnostico-externo';
 
 export interface StatusTef {
   /** True = ta tudo OK e venda passa. False = algum problema na lista. */
   tudoOk: boolean;
   /** Lista descritiva pra mostrar pro user. */
   problemas: string[];
+  /** Diagnostico externo (Defender, porta 443, SitDemo). */
+  externo?: DiagnosticoExterno;
   detalhes: {
     pastaInstalada: boolean;
     servicoExiste: boolean;
@@ -150,6 +153,15 @@ export async function verificarStatusTef(): Promise<StatusTef> {
     problemas.push('Servico parado — HTTPS local nao pode ser testado');
   }
 
+  // Diagnostico externo (problemas que nao sao bugs nossos: Defender,
+  // porta 443 ocupada por terceiro, etc).
+  let externo;
+  try {
+    externo = await coletarDiagnosticoExterno();
+  } catch {
+    /* nao bloqueia status se diagnostico externo falhar */
+  }
+
   return {
     tudoOk: problemas.length === 0,
     problemas,
@@ -163,6 +175,7 @@ export async function verificarStatusTef(): Promise<StatusTef> {
       versaoAgente,
       versaoClisitef,
     },
+    externo,
   };
 }
 

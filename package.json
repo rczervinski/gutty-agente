@@ -10,7 +10,7 @@
     "build:renderer": "esbuild renderer/main.tsx --bundle --outfile=dist/renderer/main.js --loader:.tsx=tsx --loader:.ts=ts --jsx=automatic --platform=browser --target=es2022 --minify",
     "build:css": "tailwindcss -i renderer/styles.css -o dist/renderer/styles.css --minify",
     "build:html": "node -e \"require('fs').copyFileSync('renderer/index.html', 'dist/renderer/index.html')\"",
-    "build:assets": "node -e \"const fs=require('fs');const p=require('path');const src='renderer/assets';const dst='dist/renderer/assets';if(!fs.existsSync(src))process.exit(0);fs.mkdirSync(dst,{recursive:true});for(const f of fs.readdirSync(src))fs.copyFileSync(p.join(src,f),p.join(dst,f));console.log('assets copiados:',fs.readdirSync(dst).join(','));\"",
+    "build:assets": "node -e \"const fs=require('fs');if(!fs.existsSync('renderer/assets'))process.exit(0);fs.cpSync('renderer/assets','dist/renderer/assets',{recursive:true,force:true});console.log('assets copiados (recursive)');\"",
     "build": "npm run build:electron && npm run build:renderer && npm run build:css && npm run build:html && npm run build:assets",
     "dev": "npm run build && electron dist/electron/main.js",
     "pack:payload": "node pack.js",

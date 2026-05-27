@@ -10,13 +10,14 @@
  *  - "instalacao-erro"   : depois de tentar instalar e falhar
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   InstalacaoResultado,
   ProgressoInstalacao,
   StatusTefSnapshot,
 } from '../../electron/shared-types';
 import { useSession } from '../auth/SessionContext';
+import { TutorialDefender } from '../components/TutorialDefender';
 
 type EstadoUI = 'carregando-status' | 'saudavel' | 'problema' | 'sem-config' | 'instalando' | 'instalacao-erro';
 
@@ -26,16 +27,35 @@ export function TefPage(): JSX.Element {
   const [status, setStatus] = useState<StatusTefSnapshot | null>(null);
   const [progresso, setProgresso] = useState<ProgressoInstalacao | null>(null);
   const [resultado, setResultado] = useState<InstalacaoResultado | null>(null);
+  const [tutorialAberto, setTutorialAberto] = useState(false);
+  const estadoRef = useRef(estado);
+  estadoRef.current = estado;
 
-  const carregarStatus = useCallback(async () => {
-    setEstado('carregando-status');
+  const carregarStatus = useCallback(async (mostrarLoading = true) => {
+    if (mostrarLoading) setEstado('carregando-status');
     const s = await window.gutty.tefStatus();
     setStatus(s);
-    setEstado(s.tudoOk ? 'saudavel' : 'problema');
+    // Nao sobrescreve estados ativos (instalando/erro) durante poll silencioso
+    const e = estadoRef.current;
+    if (e !== 'instalando' && e !== 'instalacao-erro') {
+      setEstado(s.tudoOk ? 'saudavel' : 'problema');
+    }
   }, []);
 
   useEffect(() => {
     void carregarStatus();
+  }, [carregarStatus]);
+
+  // Auto-refresh a cada 5s. Pula se estiver instalando ou em modal de erro
+  // pra nao atrapalhar UX. Refresh silencioso (sem mostrar "carregando").
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const e = estadoRef.current;
+      if (e === 'saudavel' || e === 'problema') {
+        void carregarStatus(false);
+      }
+    }, 5000);
+    return () => clearInterval(timer);
   }, [carregarStatus]);
 
   useEffect(() => {
@@ -78,18 +98,26 @@ export function TefPage(): JSX.Element {
       )}
 
       {(estado === 'saudavel' || estado === 'problema') && status && (
-        <DiagnosticoView
-          status={status}
-          temConfig={!!sessao?.configTef}
-          onRecarregarConfig={async () => {
-            await recarregarConfig();
-            await carregarStatus();
-          }}
-          onRecarregarStatus={() => void carregarStatus()}
-          onInstalar={() => void instalar(false)}
-          onReinstalar={() => void instalar(true)}
-        />
+        <>
+          <AlertaProblemaExterno
+            status={status}
+            onAbrirTutorialDefender={() => setTutorialAberto(true)}
+          />
+          <DiagnosticoView
+            status={status}
+            temConfig={!!sessao?.configTef}
+            onRecarregarConfig={async () => {
+              await recarregarConfig();
+              await carregarStatus();
+            }}
+            onRecarregarStatus={() => void carregarStatus()}
+            onInstalar={() => void instalar(false)}
+            onReinstalar={() => void instalar(true)}
+          />
+        </>
       )}
+
+      {tutorialAberto && <TutorialDefender onFechar={() => setTutorialAberto(false)} />}
 
       {estado === 'sem-config' && (
         <Card>
@@ -276,6 +304,115 @@ function BotaoCopiarDiagnostico(): JSX.Element {
         : 'Copiar diagnostico'}
     </button>
   );
+}
+
+/**
+ * Alerta no topo se ha problema EXTERNO conhecido: Defender ativo sem
+ * exclusao (vai apagar a DLL), porta 443 ocupada por outro app, ou
+ * informativo de SitDemo nao aberto em homologacao.
+ */
+function AlertaProblemaExterno({
+  status,
+  onAbrirTutorialDefender,
+}: {
+  status: StatusTefSnapshot;
+  onAbrirTutorialDefender: () => void;
+}): JSX.Element | null {
+  const ext = status.externo;
+  if (!ext) return null;
+
+  const cards: JSX.Element[] = [];
+
+  // 1. Defender vai/esta atrapalhando
+  if (ext.defender.vaiAtrapalhar || ext.defender.quarentenaDetectada) {
+    cards.push(
+      <div
+        key="defender"
+        className="bg-red-50 border border-red-200 rounded-lg p-4 mb-3"
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-2 h-2 rounded-full bg-red-500 mt-1.5 shrink-0" />
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-red-900 mb-1">
+              Windows Defender vai bloquear o agente TEF
+            </h3>
+            <p className="text-sm text-red-800 leading-relaxed mb-3">
+              {ext.defender.quarentenaDetectada
+                ? 'O Defender ja apagou a DLL principal do agente uma ou mais vezes.'
+                : 'O Defender esta ativo e sua pasta de instalacao nao esta excluida.'}{' '}
+              Sem liberar, a instalacao nao vai concluir.
+            </p>
+            <p className="text-xs text-red-800 mb-3">
+              O proprio app tenta adicionar a excecao automaticamente durante a
+              instalacao (precisa UAC). Se ainda assim falhar, voce pode liberar
+              manualmente seguindo o tutorial abaixo.
+            </p>
+            <button
+              onClick={onAbrirTutorialDefender}
+              className="px-3 py-1.5 bg-red-700 hover:bg-red-800 text-white rounded-md text-sm font-semibold"
+            >
+              Ver tutorial passo a passo
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Porta 443 ocupada por OUTRO processo
+  if (ext.porta443.bloqueada && ext.porta443.processoOutro) {
+    cards.push(
+      <div
+        key="porta443"
+        className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-3"
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-2 h-2 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-amber-900 mb-1">
+              Porta 443 ocupada por outro programa
+            </h3>
+            <p className="text-sm text-amber-800 leading-relaxed">
+              O processo <code className="bg-white px-1 rounded">{ext.porta443.processoOutro}</code>{' '}
+              esta ocupando a porta 443. Geralmente: IIS, Skype (versao antiga), Hyper-V
+              ou outro servidor web local. Feche esse programa antes de instalar.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 3. SitDemo nao aberto — informativo (apenas se TEF instalado mas DLL nao inicializou)
+  if (
+    status.detalhes.servicoRodando &&
+    !status.detalhes.dllInicializada &&
+    !ext.sitdemo.rodando
+  ) {
+    cards.push(
+      <div
+        key="sitdemo"
+        className="bg-sky-50 border border-sky-200 rounded-lg p-4 mb-3"
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-2 h-2 rounded-full bg-sky-500 mt-1.5 shrink-0" />
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-sky-900 mb-1">
+              SitDemo nao esta aberto (homologacao)
+            </h3>
+            <p className="text-sm text-sky-800 leading-relaxed">
+              Pra passar cartao em homologacao, abra o programa SitDemo. Sem ele
+              a DLL CliSiTef nao inicializa transacoes. (Em producao, isso vira
+              IP do servidor SiTef real do banco.)
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (cards.length === 0) return null;
+  return <div className="mb-2">{cards}</div>;
 }
 
 function Card({ children }: { children: React.ReactNode }): JSX.Element {
