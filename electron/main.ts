@@ -314,6 +314,11 @@ function registrarIpcHandlers(): void {
       '--- LOG DO AGENTE (ultimas linhas) ---',
       diag.logTrecho ?? '(nao encontrado)',
       '',
+      '--- LOG NSSM (stdout/stderr do servico) ---',
+      // O diagnostico devolve o resumo com nssm — extrai usando regex
+      /(?:^|\n)Log NSSM[^]*?(?=\n\nEventos recentes:|$)/.exec(diag.resumo)?.[0]?.trim() ??
+        '(nao encontrado)',
+      '',
       '--- EVENT LOG ---',
       diag.eventosRecentes ?? '(sem eventos relacionados)',
     ];

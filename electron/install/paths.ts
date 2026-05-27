@@ -1,7 +1,14 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const INSTALL_DIR = 'C:\\Program Files\\Gutty TEF';
+/**
+ * Onde o agente CliSiTef da SE eh instalado.
+ * Renomeado de "Gutty TEF" pra "Gutty Agente" — coerente com o nome do
+ * app (Gutty Agente, modulos TEF/Impressoras/Balancas).
+ * Manter "agente" como subpasta porque o ZIP da SE coloca conteudo
+ * direto em bin/ e helper/ — agente/ separa por modulo no futuro.
+ */
+export const INSTALL_DIR = 'C:\\Program Files\\Gutty Agente';
 export const AGENT_DIR = join(INSTALL_DIR, 'agente');
 export const AGENT_BIN = join(AGENT_DIR, 'bin');
 export const AGENT_EXE = join(AGENT_BIN, 'agenteCliSiTef.exe');

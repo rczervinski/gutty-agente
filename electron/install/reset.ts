@@ -18,16 +18,38 @@ import { AGENT_EXE, GUTTY_CONFIG_DIR, INSTALL_DIR, NSSM_INSTALLED, SERVICE_NAME 
 import { exec } from './util';
 
 /**
- * Mata processos zumbis do agenteCliSiTef e para o servico.
+ * Mata processos zumbis do agenteCliSiTef + NSSM e para o servico.
+ * Loop ate confirmar zero processos vivos (evita race condition onde
+ * NSSM relança o agente antes do reset prosseguir).
+ *
  * NAO apaga arquivos. Idempotente — sempre seguro de chamar.
  */
 export async function limparZumbis(): Promise<void> {
-  // Mata processos avulsos (pode ter mais de um se reset anterior nao limpou).
-  await exec('taskkill', ['/F', '/IM', 'agenteCliSiTef.exe', '/T'], { ignoreErr: true });
-  // Para o servico (se existir).
+  // Primeiro: parar NSSM (pra ele NAO restartar o agente quando matarmos).
+  if (existsSync(NSSM_INSTALLED)) {
+    await exec(NSSM_INSTALLED, ['stop', SERVICE_NAME], { ignoreErr: true });
+  }
   await exec('sc', ['stop', SERVICE_NAME], { ignoreErr: true });
-  // Pequena espera pra Windows liberar handles.
   await new Promise((r) => setTimeout(r, 1000));
+
+  // Loop ate processos morrerem de verdade. Tipicamente 1-2 iteracoes
+  // bastam, mas garantimos com timeout de 10s.
+  for (let i = 0; i < 10; i++) {
+    await exec('taskkill', ['/F', '/IM', 'agenteCliSiTef.exe', '/T'], { ignoreErr: true });
+    await exec('taskkill', ['/F', '/IM', 'nssm.exe', '/T'], { ignoreErr: true });
+    await new Promise((r) => setTimeout(r, 600));
+
+    // Conta processos restantes
+    const r = await exec(
+      'tasklist',
+      ['/FI', 'IMAGENAME eq agenteCliSiTef.exe', '/FO', 'CSV', '/NH'],
+      { ignoreErr: true }
+    );
+    if (r.code === 0 && (r.stdout.includes('INFO:') || r.stdout.trim() === '')) {
+      // Tudo limpo
+      return;
+    }
+  }
 }
 
 /**

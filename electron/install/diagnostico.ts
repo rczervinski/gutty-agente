@@ -114,6 +114,34 @@ async function lerLogRecente(): Promise<string | undefined> {
   }
 }
 
+/**
+ * Le os logs do NSSM (stdout/stderr do agente quando rodado como servico).
+ * Esses logs sao onde o agente cospe erros que nao apareceriam em
+ * access-XXXX.log dele.
+ */
+async function lerLogNssm(): Promise<string | undefined> {
+  const candidatos = [
+    'C:\\Program Files\\Gutty Agente\\agente\\logs\\nssm-stderr.log',
+    'C:\\Program Files\\Gutty Agente\\agente\\logs\\nssm-stdout.log',
+    'C:\\Program Files\\Gutty TEF\\agente\\logs\\nssm-stderr.log',
+    'C:\\Program Files\\Gutty TEF\\agente\\logs\\nssm-stdout.log',
+  ];
+  const partes: string[] = [];
+  for (const p of candidatos) {
+    if (!existsSync(p)) continue;
+    try {
+      const conteudo = readFileSync(p, 'utf-8').split(/\r?\n/);
+      const ultimas = conteudo.slice(-15).join('\n');
+      if (ultimas.trim()) {
+        partes.push(`${p}:\n${ultimas}`);
+      }
+    } catch {
+      /* ignora */
+    }
+  }
+  return partes.length > 0 ? partes.join('\n\n') : undefined;
+}
+
 async function lerEventosRecentes(): Promise<string | undefined> {
   // Busca eventos recentes (ultimos 5 min) que mencionem o servico
   const r = await pwsh(
@@ -129,6 +157,7 @@ export async function coletarDiagnostico(): Promise<DiagnosticoDetalhado> {
   const porta443 = await checarPorta443();
   const sc = await exec('sc.exe', ['qc', SERVICE_NAME], { ignoreErr: true });
   const log = await lerLogRecente();
+  const logNssm = await lerLogNssm();
   const eventos = await lerEventosRecentes();
 
   const partes: string[] = [];
@@ -148,6 +177,10 @@ export async function coletarDiagnostico(): Promise<DiagnosticoDetalhado> {
     partes.push('Log do agente:\n' + log);
   } else {
     partes.push('Nenhum log do agente encontrado.');
+  }
+
+  if (logNssm) {
+    partes.push('Log NSSM (stdout/stderr do agente):\n' + logNssm);
   }
 
   if (eventos) {
