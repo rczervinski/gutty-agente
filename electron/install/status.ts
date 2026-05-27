@@ -57,14 +57,18 @@ async function contarProcessos(): Promise<number> {
 
 /**
  * Checa se servico AgenteCliSiTef esta RUNNING via `sc query`.
+ *
+ * IMPORTANTE: a saida do sc.exe e LOCALIZADA — em PT-BR aparece "ESTADO"
+ * em vez de "STATE". Mas o valor "RUNNING" e hardcoded em ingles em
+ * qualquer locale. Por isso testamos por "RUNNING" diretamente.
  */
 async function checarServico(): Promise<{ existe: boolean; rodando: boolean }> {
   const r = await exec('sc', ['query', SERVICE_NAME], { ignoreErr: true });
   if (r.code !== 0) return { existe: false, rodando: false };
-  // Saida tipica:
-  //   STATE              : 4  RUNNING
-  // ou STATE             : 1  STOPPED
-  const rodando = /STATE\s+:\s+4\s+RUNNING/i.test(r.stdout);
+  // Testa por "4 RUNNING" ou ":4 RUNNING" (o numero 4 e o codigo do estado
+  // RUNNING no SCM, garantia adicional contra falso positivo se a palavra
+  // "RUNNING" aparecer em outro contexto).
+  const rodando = /\b4\s+RUNNING\b/i.test(r.stdout);
   return { existe: true, rodando };
 }
 
