@@ -22,7 +22,8 @@
     "deploy:release": "node deploy-to-public.js"
   },
   "dependencies": {
-    "adm-zip": "^0.5.16"
+    "adm-zip": "^0.5.16",
+    "node-stream-zip": "^1.15.0"
   },
   "devDependencies": {
     "@electron/packager": "^20.0.0",
