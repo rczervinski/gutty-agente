@@ -16,7 +16,7 @@
 
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
-import type { AmbienteApi, PairConfig, ProgressoInstalacao } from './shared-types';
+import type { AmbienteApi, InstalacaoResultado, PairConfig, ProgressoInstalacao } from './shared-types';
 import { buscarConfigPosLogin, consumirToken, login } from './install/api';
 import { isAdmin } from './install/orquestrador';
 import { instalarComElevacao, processarFlagInstalacaoElevada } from './install/elevate';
@@ -187,11 +187,35 @@ function registrarIpcHandlers(): void {
     return buscarConfigPosLogin(jwt, ambiente);
   });
 
+  // Mutex global pra evitar 2 instalacoes simultaneas. Bug grave: o user
+  // clicando "Instalar" 2x (UAC demorou, ansiedade) fazia 2 helpers UAC
+  // subirem, o segundo detectava install do primeiro e apagava a DLL
+  // recem-extraida.
+  let instalacaoEmCurso = false;
+  async function runInstall(
+    config: PairConfig,
+    tenantId: string,
+    resetAntes: boolean
+  ): Promise<InstalacaoResultado> {
+    if (instalacaoEmCurso) {
+      return {
+        ok: false,
+        erro: 'Ja existe uma instalacao em andamento. Aguarde concluir.',
+      };
+    }
+    instalacaoEmCurso = true;
+    try {
+      const emit = (p: ProgressoInstalacao): void => {
+        mainWindow?.webContents.send('gutty:progresso', p);
+      };
+      return await instalarComElevacao(config, tenantId, emit, isAdmin(), resetAntes);
+    } finally {
+      instalacaoEmCurso = false;
+    }
+  }
+
   ipcMain.handle('gutty:instalar', async (_e, config: PairConfig, tenantId: string) => {
-    const emit = (p: ProgressoInstalacao): void => {
-      mainWindow?.webContents.send('gutty:progresso', p);
-    };
-    return instalarComElevacao(config, tenantId, emit, isAdmin(), false);
+    return runInstall(config, tenantId, false);
   });
 
   // --- Sessao persistente ---
@@ -271,10 +295,7 @@ function registrarIpcHandlers(): void {
   ipcMain.handle(
     'gutty:tefReinstalar',
     async (_e, config: PairConfig, tenantId: string) => {
-      const emit = (p: ProgressoInstalacao): void => {
-        mainWindow?.webContents.send('gutty:progresso', p);
-      };
-      return instalarComElevacao(config, tenantId, emit, isAdmin(), true);
+      return runInstall(config, tenantId, true);
     }
   );
 

@@ -8,14 +8,12 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { extrairAgente, localizarPayloadZip } from './extract';
 import { configurarAgente } from './configure';
 import { gerarCertificadosEServico } from './certs';
 import { iniciarServico } from './service';
-import { limparZumbis, resetCompleto } from './reset';
+import { limparZumbis } from './reset';
 import { garantirSaudeAgente, gerarMensagemErro } from './garantir-saude';
-import { INSTALL_DIR } from './paths';
 import type { InstalacaoResultado, PairConfig, ProgressoInstalacao } from '../shared-types';
 
 type EmitProgresso = (p: ProgressoInstalacao) => void;
@@ -43,23 +41,18 @@ export async function instalar(
 
   const TOTAL = 6;
   try {
-    // 1) Limpeza preventiva. Se ja existe pasta de instalacao, faz reset
-    // COMPLETO (apaga servico, pasta, cert) — instalacao anterior pode
-    // estar corrompida e provavelmente foi o motivo do user clicar
-    // "Instalar" de novo. Comecar do zero e mais seguro.
-    if (existsSync(INSTALL_DIR)) {
-      emit({
-        passo: 1,
-        total: TOTAL,
-        label: 'Detectada instalacao anterior — fazendo reset completo...',
-      });
-      await resetCompleto((label, detalhe) =>
-        emit({ passo: 1, total: TOTAL, label, detalhe })
-      );
-    } else {
-      emit({ passo: 1, total: TOTAL, label: 'Limpando processos do agente...' });
-      await limparZumbis();
-    }
+    // 1) Limpeza preventiva — APENAS processos e servico (nao-destrutivo).
+    //
+    // IMPORTANTE: NAO apaga arquivos aqui. Antes apagavamos a pasta toda
+    // se ja existisse — isso criava race condition mortal quando o user
+    // clicava "Instalar" duas vezes (UAC demora, clica de novo): a segunda
+    // execucao detectava a pasta da primeira, apagava a DLL recem-extraida
+    // E carregada pelo agente, e o serviço morria. Bug confirmado em audit.
+    //
+    // Reset destrutivo agora SO acontece via botao "Reinstalar do zero"
+    // explicito (resetAntes=true no elevate.ts).
+    emit({ passo: 1, total: TOTAL, label: 'Limpando processos do agente...' });
+    await limparZumbis();
 
     // 2) Localizar e extrair
     emit({ passo: 2, total: TOTAL, label: 'Localizando pacote do agente...' });

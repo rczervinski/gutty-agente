@@ -53,7 +53,38 @@ export function processarFlagInstalacaoElevada(): boolean {
 
   void (async () => {
     let payload: PayloadElevado | null = null;
+    // Lockfile pra defesa CONTRA segunda instancia elevada paralela
+    // (alem do mutex no main.ts, que pode ser bypassed se algo quebrar).
+    const lockfile = path.join(os.tmpdir(), 'gutty-install.lock');
     try {
+      if (fs.existsSync(lockfile)) {
+        const idade = Date.now() - fs.statSync(lockfile).mtimeMs;
+        if (idade < 5 * 60 * 1000) {
+          // Lock recente — outra instalacao em curso. Sai sem fazer nada.
+          // Como nao temos como reportar pro main (somos processo separado),
+          // escrevemos no resultPath se conseguirmos ler o cfg.
+          try {
+            const raw = fs.readFileSync(cfgPath, 'utf8');
+            const p = JSON.parse(raw) as PayloadElevado;
+            fs.writeFileSync(
+              p.resultPath,
+              JSON.stringify({
+                ok: false,
+                erro: 'Outra instalacao ja esta em andamento. Aguarde concluir.',
+              }),
+              'utf8'
+            );
+          } catch {
+            /* ignora */
+          }
+          app.quit();
+          return;
+        }
+        // Lock velho (>5min) — provavelmente helper antigo crashou. Apaga.
+        try { fs.unlinkSync(lockfile); } catch { /* ignora */ }
+      }
+      fs.writeFileSync(lockfile, String(process.pid), 'utf8');
+
       const raw = fs.readFileSync(cfgPath, 'utf8');
       payload = JSON.parse(raw) as PayloadElevado;
 
@@ -88,6 +119,8 @@ export function processarFlagInstalacaoElevada(): boolean {
         }
       }
     } finally {
+      // Libera lockfile pra proxima instalacao poder rodar
+      try { fs.unlinkSync(lockfile); } catch { /* ignora */ }
       app.quit();
     }
   })();
