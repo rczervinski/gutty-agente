@@ -1,13 +1,12 @@
 /**
- * Configuracoes do Gutty Agente.
- *
- * Por enquanto: toggle de autostart no Windows + info de versao/suporte.
- * Futuro: ajuste de servidor Gutty, idioma, logs, etc.
+ * Configuracoes do Gutty Agente: autostart, conta logada, info de versao.
  */
 
 import { useEffect, useState } from 'react';
+import { useSession } from '../auth/SessionContext';
 
 export function SettingsPage(): JSX.Element {
+  const { sessao, logout } = useSession();
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [versao, setVersao] = useState('1.0.0');
 
@@ -31,6 +30,33 @@ export function SettingsPage(): JSX.Element {
         </p>
         <h1 className="text-2xl font-semibold text-slate-900">Preferencias</h1>
       </div>
+
+      {/* Conta */}
+      {sessao && (
+        <div className="bg-white border border-slate-200 rounded-lg p-5 mb-3">
+          <p className="text-sm font-semibold text-slate-900 mb-3">Conta</p>
+          <dl className="space-y-2 text-sm mb-4">
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Usuario</dt>
+              <dd className="text-slate-900">{sessao.nome ?? '(via token)'}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Tenant</dt>
+              <dd className="text-slate-900 font-mono text-xs">{sessao.tenantId}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Servidor</dt>
+              <dd className="text-slate-900 font-mono text-xs">{sessao.ambiente.baseUrl}</dd>
+            </div>
+          </dl>
+          <button
+            onClick={() => void logout()}
+            className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-md text-sm"
+          >
+            Sair (faz login de novo)
+          </button>
+        </div>
+      )}
 
       {/* Autostart */}
       <div className="bg-white border border-slate-200 rounded-lg p-5 mb-3">
@@ -72,10 +98,6 @@ export function SettingsPage(): JSX.Element {
           <div className="flex justify-between">
             <dt className="text-slate-500">Versao</dt>
             <dd className="text-slate-900 font-mono">{versao}</dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-slate-500">Servidor</dt>
-            <dd className="text-slate-900 font-mono">caixa.gutty.app.br</dd>
           </div>
           <div className="flex justify-between">
             <dt className="text-slate-500">Suporte</dt>

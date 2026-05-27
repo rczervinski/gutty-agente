@@ -24,6 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { InstalacaoResultado, PairConfig, ProgressoInstalacao } from '../shared-types';
 import { instalar } from './orquestrador';
+import { resetCompleto } from './reset';
 
 type EmitProgresso = (p: ProgressoInstalacao) => void;
 
@@ -36,6 +37,8 @@ export interface PayloadElevado {
   tenantId: string;
   progressPath: string;
   resultPath: string;
+  /** Se true, faz resetCompleto() ANTES de instalar (botao "Reinstalar"). */
+  resetAntes?: boolean;
 }
 
 /**
@@ -61,6 +64,14 @@ export function processarFlagInstalacaoElevada(): boolean {
           /* nao falha por causa de log */
         }
       };
+
+      // Modo "Reinstalar": resetCompleto antes de instalar.
+      if (payload.resetAntes) {
+        emit({ passo: 0, total: 6, label: 'Resetando instalacao anterior...' });
+        await resetCompleto((label, detalhe) =>
+          emit({ passo: 0, total: 6, label, detalhe })
+        );
+      }
 
       const res = await instalar(payload.config, payload.tenantId, emit);
       fs.writeFileSync(payload.resultPath, JSON.stringify(res), 'utf8');
@@ -102,26 +113,36 @@ function criarDirTemp(): string {
  */
 function spawnElevado(exePath: string, cfgPath: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    // Aspas simples ao redor do path pra suportar espacos. Aspas duplas
-    // dentro do PS sao escape com `"`.
-    const psCmd = [
-      'Start-Process',
-      '-FilePath',
-      `'${exePath.replace(/'/g, "''")}'`,
-      '-ArgumentList',
-      `'--install-tef','${cfgPath.replace(/'/g, "''")}'`,
-      '-Verb',
-      'RunAs',
-      '-Wait',
-      '-PassThru',
-      '|',
-      'Select-Object -ExpandProperty ExitCode',
-    ].join(' ');
+    // Padrao robusto: -PassThru retorna o objeto Process, WaitForExit()
+    // garante que o ExitCode esta disponivel. Combinar -Wait com -PassThru
+    // + pipe pra ExpandProperty quebra ("processo deve ser encerrado pra
+    // que as informacoes solicitadas sejam determinadas").
+    //
+    // Aspas: usamos here-string nao precisamos. Em vez disso, montamos
+    // o script PowerShell com escape correto. Quoting de caminhos com
+    // espacos: encapsulamos em aspas simples PS, e escapamos aspa simples
+    // duplicando ('' dentro de '...').
+    const psScript = `
+$ErrorActionPreference = 'Stop'
+try {
+  $proc = Start-Process -FilePath '${exePath.replace(/'/g, "''")}' ` +
+      `-ArgumentList '--install-tef','${cfgPath.replace(/'/g, "''")}' ` +
+      `-Verb RunAs -PassThru
+  $proc.WaitForExit()
+  exit $proc.ExitCode
+} catch {
+  Write-Error $_.Exception.Message
+  exit 99
+}`.trim();
 
-    const child = spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', psCmd], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
+    const child = spawn(
+      'powershell',
+      ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', psScript],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      }
+    );
 
     let stderr = '';
     child.stderr?.on('data', (d) => (stderr += d.toString()));
@@ -131,9 +152,15 @@ function spawnElevado(exePath: string, cfgPath: string): Promise<number> {
       if (code === 0) {
         resolve(0);
       } else {
+        const lower = stderr.toLowerCase();
+        const negouUac =
+          lower.includes('canceled by the user') ||
+          lower.includes('cancelada pelo usu') ||
+          lower.includes('operacao foi cancelada') ||
+          lower.includes('operação foi cancelada');
         reject(
           new Error(
-            stderr.includes('canceled by the user')
+            negouUac
               ? 'UAC negado pelo usuario'
               : `Helper elevado falhou (exit ${code}): ${stderr.slice(0, 300)}`
           )
@@ -189,9 +216,16 @@ export async function instalarComElevacao(
   config: PairConfig,
   tenantId: string,
   emit: EmitProgresso,
-  isAdminAgora: boolean
+  isAdminAgora: boolean,
+  resetAntes = false
 ): Promise<InstalacaoResultado> {
   if (isAdminAgora) {
+    if (resetAntes) {
+      emit({ passo: 0, total: 6, label: 'Resetando instalacao anterior...' });
+      await resetCompleto((label, detalhe) =>
+        emit({ passo: 0, total: 6, label, detalhe })
+      );
+    }
     return instalar(config, tenantId, emit);
   }
 
@@ -200,7 +234,7 @@ export async function instalarComElevacao(
   const progressPath = path.join(dir, 'progress.jsonl');
   const resultPath = path.join(dir, 'result.json');
 
-  const payload: PayloadElevado = { config, tenantId, progressPath, resultPath };
+  const payload: PayloadElevado = { config, tenantId, progressPath, resultPath, resetAntes };
   fs.writeFileSync(cfgPath, JSON.stringify(payload), 'utf8');
   fs.writeFileSync(progressPath, '', 'utf8'); // garante existencia
 

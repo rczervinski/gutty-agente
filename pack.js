@@ -74,6 +74,7 @@ const packResult = run('npx', [
   '--app-copyright=Gutty',
   '--app-version=1.0.0',
   '--build-version=1.0.0',
+  '--icon=renderer/assets/icon.ico',
   '--asar',
   '--prune=true',
 ]);

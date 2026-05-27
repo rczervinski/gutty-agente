@@ -1,77 +1,62 @@
 /**
- * Aba TEF — contem todo o fluxo de instalacao/operacao do agente
- * CliSiTef que antes vivia no App.tsx do antigo instalador.
+ * Aba TEF — agora consome sessao global (login uma vez, vide SessionContext).
  *
- * Estados internos:
- *  - intro     -> apresenta as duas formas de pareamento (token / login)
- *  - token     -> cola token (uso unico, 10min)
- *  - login     -> e-mail/senha Gutty Web
- *  - installing-> barra de progresso (recebe eventos via IPC)
- *  - done      -> sucesso (versoes detectadas) ou erro
- *
- * Sem emojis, paleta clara, tipografia sobria. Mesmo backend (mesmas
- * APIs window.gutty.*) da versao instalador.
+ * Estados:
+ *  - "carregando-status" : checa diagnostico real (servico + processo + HTTPS + cert)
+ *  - "saudavel"          : tudo OK, mostra info + botoes (recarregar, reinstalar)
+ *  - "problema"          : lista problemas + botao reinstalar
+ *  - "sem-config"        : nao temos PairConfig na sessao — pede pra recarregar do PDV
+ *  - "instalando"        : barra de progresso (evento gutty:progresso)
+ *  - "instalacao-erro"   : depois de tentar instalar e falhar
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type {
-  AmbienteApi,
   InstalacaoResultado,
-  PairConfig,
-  PairResultado,
   ProgressoInstalacao,
+  StatusTefSnapshot,
 } from '../../electron/shared-types';
+import { useSession } from '../auth/SessionContext';
 
-type Estado = 'intro' | 'token' | 'login' | 'installing' | 'done';
-
-const BASE_URL_PADRAO = 'https://caixa.gutty.app.br';
+type EstadoUI = 'carregando-status' | 'saudavel' | 'problema' | 'sem-config' | 'instalando' | 'instalacao-erro';
 
 export function TefPage(): JSX.Element {
-  const [estado, setEstado] = useState<Estado>('intro');
-  const [baseUrl, setBaseUrl] = useState(BASE_URL_PADRAO);
-  const [tenantId, setTenantId] = useState<string | null>(null);
-  const [config, setConfig] = useState<PairConfig | null>(null);
-  const [resultado, setResultado] = useState<InstalacaoResultado | null>(null);
+  const { sessao, recarregarConfig } = useSession();
+  const [estado, setEstado] = useState<EstadoUI>('carregando-status');
+  const [status, setStatus] = useState<StatusTefSnapshot | null>(null);
   const [progresso, setProgresso] = useState<ProgressoInstalacao | null>(null);
+  const [resultado, setResultado] = useState<InstalacaoResultado | null>(null);
 
-  // Captura --token=... do CLI no boot (so dispara uma vez).
-  useEffect(() => {
-    void (async () => {
-      const t = await window.gutty.tokenInicial();
-      if (t) {
-        setEstado('token');
-        // Defer pra render mostrar a tela
-        setTimeout(() => void usarToken(t), 60);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const carregarStatus = useCallback(async () => {
+    setEstado('carregando-status');
+    const s = await window.gutty.tefStatus();
+    setStatus(s);
+    setEstado(s.tudoOk ? 'saudavel' : 'problema');
   }, []);
 
-  // Listener de progresso
+  useEffect(() => {
+    void carregarStatus();
+  }, [carregarStatus]);
+
   useEffect(() => {
     return window.gutty.onProgresso((p) => setProgresso(p));
   }, []);
 
-  const ambiente: AmbienteApi = useMemo(() => ({ baseUrl }), [baseUrl]);
-
-  async function usarToken(token: string): Promise<void> {
-    setProgresso({ passo: 0, total: 5, label: 'Consultando servidor Gutty...' });
-    const r = await window.gutty.parearComToken(token, ambiente);
-    if (!r.ok) {
-      setResultado({ ok: false, erro: r.erro });
-      setEstado('done');
+  async function instalar(reinstalar: boolean): Promise<void> {
+    if (!sessao?.configTef) {
+      setEstado('sem-config');
       return;
     }
-    setTenantId(r.tenantId);
-    setConfig(r.config);
-    setEstado('installing');
-    await instalarAgora(r);
-  }
-
-  async function instalarAgora(r: PairResultado): Promise<void> {
-    const res = await window.gutty.instalar(r.config, r.tenantId);
-    setResultado(res);
-    setEstado('done');
+    setEstado('instalando');
+    setProgresso(null);
+    const fn = reinstalar ? window.gutty.tefReinstalar : window.gutty.instalar;
+    const r = await fn(sessao.configTef, sessao.tenantId);
+    setResultado(r);
+    if (r.ok) {
+      await carregarStatus();
+    } else {
+      setEstado('instalacao-erro');
+    }
   }
 
   return (
@@ -82,309 +67,228 @@ export function TefPage(): JSX.Element {
         </p>
         <h1 className="text-2xl font-semibold text-slate-900">TEF — pagamento por cartao</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Conecta o seu pinpad fisico ao PDV web atraves do agente CliSiTef oficial.
+          Agente CliSiTef oficial. Diagnostico em tempo real.
         </p>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-lg p-6">
-        {estado === 'intro' && (
-          <TelaIntro
-            onComToken={() => setEstado('token')}
-            onSemToken={() => setEstado('login')}
-            baseUrl={baseUrl}
-            setBaseUrl={setBaseUrl}
-          />
-        )}
+      {estado === 'carregando-status' && (
+        <Card>
+          <p className="text-sm text-slate-500">Verificando status do agente...</p>
+        </Card>
+      )}
 
-        {estado === 'token' && (
-          <TelaToken
-            ambiente={ambiente}
-            onConcluido={async (r) => {
-              setTenantId(r.tenantId);
-              setConfig(r.config);
-              setEstado('installing');
-              await instalarAgora(r);
+      {(estado === 'saudavel' || estado === 'problema') && status && (
+        <DiagnosticoView
+          status={status}
+          temConfig={!!sessao?.configTef}
+          onRecarregarConfig={async () => {
+            await recarregarConfig();
+            await carregarStatus();
+          }}
+          onRecarregarStatus={() => void carregarStatus()}
+          onInstalar={() => void instalar(false)}
+          onReinstalar={() => void instalar(true)}
+        />
+      )}
+
+      {estado === 'sem-config' && (
+        <Card>
+          <h2 className="text-base font-semibold text-slate-900 mb-1">Sem configuracao TEF</h2>
+          <p className="text-sm text-slate-600 mb-4">
+            Sua sessao nao tem config TEF salva. Acesse o PDV em{' '}
+            <code className="bg-slate-100 px-1 rounded text-xs">{sessao?.ambiente.baseUrl}</code>{' '}
+            e configure em <strong>Configuracoes - TEF</strong> primeiro, depois clique abaixo.
+          </p>
+          <button
+            onClick={async () => {
+              await recarregarConfig();
+              await carregarStatus();
             }}
-            onVoltar={() => setEstado('intro')}
-          />
-        )}
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-md text-sm font-semibold"
+          >
+            Recarregar config do PDV
+          </button>
+        </Card>
+      )}
 
-        {estado === 'login' && (
-          <TelaLogin
-            ambiente={ambiente}
-            onConcluido={async (r) => {
-              setTenantId(r.tenantId);
-              setConfig(r.config);
-              setEstado('installing');
-              await instalarAgora(r);
-            }}
-            onVoltar={() => setEstado('intro')}
-          />
-        )}
+      {estado === 'instalando' && <TelaInstalando progresso={progresso} />}
 
-        {estado === 'installing' && <TelaInstalando progresso={progresso} />}
-
-        {estado === 'done' && (
-          <TelaConcluido
-            resultado={resultado}
-            config={config}
-            tenantId={tenantId}
-            onReiniciar={() => {
-              setEstado('intro');
-              setResultado(null);
-              setConfig(null);
-              setTenantId(null);
-              setProgresso(null);
-            }}
-          />
-        )}
-      </div>
+      {estado === 'instalacao-erro' && resultado && !resultado.ok && (
+        <Card>
+          <h2 className="text-xl font-semibold text-red-700 mb-2">Falhou na instalacao</h2>
+          <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-5">
+            <p className="text-red-800 text-sm font-mono whitespace-pre-wrap">{resultado.erro}</p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => void carregarStatus()}
+              className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 rounded-md text-sm font-medium"
+            >
+              Voltar
+            </button>
+            <button
+              onClick={() => void instalar(true)}
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-md text-sm font-semibold"
+            >
+              Reinstalar do zero
+            </button>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
 
-// =====================================================================
-// Subtelas
-// =====================================================================
-
-function TelaIntro({
-  onComToken,
-  onSemToken,
-  baseUrl,
-  setBaseUrl,
+function DiagnosticoView({
+  status,
+  temConfig,
+  onRecarregarConfig,
+  onRecarregarStatus,
+  onInstalar,
+  onReinstalar,
 }: {
-  onComToken: () => void;
-  onSemToken: () => void;
-  baseUrl: string;
-  setBaseUrl: (v: string) => void;
+  status: StatusTefSnapshot;
+  temConfig: boolean;
+  onRecarregarConfig: () => Promise<void>;
+  onRecarregarStatus: () => void;
+  onInstalar: () => void;
+  onReinstalar: () => void;
 }): JSX.Element {
+  const d = status.detalhes;
+
   return (
-    <div>
-      <h2 className="text-lg font-semibold text-slate-900 mb-2">Como conectar</h2>
-      <p className="text-sm text-slate-600 mb-6">
-        Escolha uma das duas formas abaixo. Em qualquer caso, os dados sensiveis
-        ficam no seu PC criptografados (DPAPI) — nunca em texto puro.
-      </p>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-8">
-        <button
-          onClick={onComToken}
-          className="text-left p-4 bg-slate-900 hover:bg-slate-800 text-white rounded-md transition"
-        >
-          <p className="font-semibold mb-1">Usar token</p>
-          <p className="text-xs text-slate-300 leading-relaxed">
-            Token de uso unico, gerado no PDV em Configuracoes - TEF.
-            Expira em 10 minutos.
-          </p>
-        </button>
-
-        <button
-          onClick={onSemToken}
-          className="text-left p-4 bg-white border border-slate-300 hover:border-slate-500 rounded-md transition"
-        >
-          <p className="font-semibold text-slate-900 mb-1">Login Gutty</p>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            Mesmas credenciais que voce usa pra entrar no PDV. Sem token
-            necessario.
-          </p>
-        </button>
-      </div>
-
-      <details className="text-xs text-slate-500">
-        <summary className="cursor-pointer hover:text-slate-700">Avancado</summary>
-        <div className="mt-3 p-3 bg-slate-50 rounded border border-slate-200">
-          <label className="block text-slate-600 mb-1 font-medium">Servidor Gutty</label>
-          <input
-            type="text"
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-slate-800"
-          />
-          <p className="text-[10px] text-slate-500 mt-1">
-            Padrao: {BASE_URL_PADRAO}. So mude se sua instalacao Gutty estiver em
-            outro dominio.
-          </p>
+    <Card>
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-2">
+          <Bolinha cor={status.tudoOk ? 'verde' : d.pastaInstalada ? 'amber' : 'vermelha'} />
+          <h2 className="text-base font-semibold text-slate-900">
+            {status.tudoOk
+              ? 'Agente saudavel'
+              : d.pastaInstalada
+              ? 'Agente com problemas'
+              : 'Agente nao instalado'}
+          </h2>
         </div>
-      </details>
-    </div>
-  );
-}
+        <button
+          onClick={onRecarregarStatus}
+          className="text-xs text-slate-500 hover:text-slate-900 px-2 py-1 rounded transition"
+          title="Refazer diagnostico"
+        >
+          Atualizar
+        </button>
+      </div>
 
-function TelaToken({
-  ambiente,
-  onConcluido,
-  onVoltar,
-}: {
-  ambiente: AmbienteApi;
-  onConcluido: (r: PairResultado) => void;
-  onVoltar: () => void;
-}): JSX.Element {
-  const [token, setToken] = useState('');
-  const [carregando, setCarregando] = useState(false);
-  const [erro, setErro] = useState<string | null>(null);
+      <div className="space-y-2 mb-5">
+        <ChecklistItem ok={d.pastaInstalada} label="Arquivos do agente em C:\\Program Files\\Gutty TEF" />
+        <ChecklistItem ok={d.servicoExiste} label='Servico Windows "AgenteCliSiTef" registrado' />
+        <ChecklistItem ok={d.servicoRodando} label="Servico em estado RUNNING" />
+        <ChecklistItem
+          ok={d.processosAtivos === 1}
+          label={`Processo unico (atual: ${d.processosAtivos})`}
+        />
+        <ChecklistItem ok={d.httpsResponde} label="HTTPS local respondendo (porta 443)" />
+        <ChecklistItem
+          ok={d.dllInicializada}
+          label={
+            d.dllInicializada
+              ? `DLL CliSiTef inicializada (v${d.versaoClisitef ?? '?'})`
+              : 'DLL CliSiTef inicializada (precisa de SitDemo/SiTef aberto)'
+          }
+        />
+      </div>
 
-  async function submit(): Promise<void> {
-    if (!token.trim()) return;
-    setCarregando(true);
-    setErro(null);
-    const r = await window.gutty.parearComToken(token.trim(), ambiente);
-    setCarregando(false);
-    if (!r.ok) {
-      setErro(r.erro);
-      return;
-    }
-    onConcluido(r);
-  }
-
-  return (
-    <div>
-      <h2 className="text-lg font-semibold text-slate-900 mb-1">Token de pareamento</h2>
-      <p className="text-sm text-slate-600 mb-5">
-        Cole o token gerado no PDV. Ele e unico e expira em 10 minutos.
-      </p>
-
-      <input
-        type="text"
-        value={token}
-        onChange={(e) => setToken(e.target.value)}
-        placeholder="gtef_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-        className="w-full bg-white border-2 border-slate-200 focus:border-slate-900 outline-none rounded-md px-4 py-3 text-slate-900 font-mono text-sm mb-4 transition"
-        autoFocus
-      />
-
-      {erro && (
-        <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded mb-4 text-sm">
-          {erro}
+      {!status.tudoOk && status.problemas.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-md p-3 mb-5">
+          <p className="text-xs font-semibold text-amber-900 uppercase tracking-wider mb-1">
+            Detalhes
+          </p>
+          <ul className="text-sm text-amber-900 space-y-1">
+            {status.problemas.map((p, i) => (
+              <li key={i}>- {p}</li>
+            ))}
+          </ul>
         </div>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap">
+        {!d.pastaInstalada && temConfig && (
+          <button
+            onClick={onInstalar}
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-md text-sm font-semibold"
+          >
+            Instalar agente
+          </button>
+        )}
+        {d.pastaInstalada && (
+          <button
+            onClick={onReinstalar}
+            disabled={!temConfig}
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md text-sm font-semibold"
+          >
+            Reinstalar do zero
+          </button>
+        )}
         <button
-          onClick={onVoltar}
-          disabled={carregando}
-          className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 rounded-md text-sm"
+          onClick={() => void onRecarregarConfig()}
+          className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 rounded-md text-sm font-medium"
         >
-          Voltar
-        </button>
-        <button
-          onClick={submit}
-          disabled={carregando || !token.trim()}
-          className="flex-1 px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md font-semibold transition"
-        >
-          {carregando ? 'Validando...' : 'Validar token e continuar'}
+          Atualizar config do PDV
         </button>
       </div>
-    </div>
+
+      {!temConfig && (
+        <p className="text-xs text-slate-500 mt-3">
+          Sua sessao nao tem config TEF — abra o PDV, configure em Configuracoes - TEF, e clique
+          "Atualizar config do PDV" aqui.
+        </p>
+      )}
+    </Card>
   );
 }
 
-function TelaLogin({
-  ambiente,
-  onConcluido,
-  onVoltar,
-}: {
-  ambiente: AmbienteApi;
-  onConcluido: (r: PairResultado) => void;
-  onVoltar: () => void;
-}): JSX.Element {
-  const [nome, setNome] = useState('');
-  const [senha, setSenha] = useState('');
-  const [carregando, setCarregando] = useState(false);
-  const [erro, setErro] = useState<string | null>(null);
+function Card({ children }: { children: React.ReactNode }): JSX.Element {
+  return <div className="bg-white border border-slate-200 rounded-lg p-6">{children}</div>;
+}
 
-  async function submit(): Promise<void> {
-    setCarregando(true);
-    setErro(null);
-    const r1 = await window.gutty.login(nome, senha, ambiente);
-    if (!r1.ok) {
-      setCarregando(false);
-      setErro(r1.erro);
-      return;
-    }
-    const r2 = await window.gutty.buscarConfigPosLogin(r1.token, ambiente);
-    setCarregando(false);
-    if (!r2.ok) {
-      setErro(r2.erro);
-      return;
-    }
-    onConcluido(r2);
-  }
+function Bolinha({ cor }: { cor: 'verde' | 'amber' | 'vermelha' }): JSX.Element {
+  const classe =
+    cor === 'verde' ? 'bg-emerald-500' : cor === 'amber' ? 'bg-amber-500' : 'bg-red-500';
+  return <span className={`inline-block w-2 h-2 rounded-full ${classe}`} aria-hidden />;
+}
 
+function ChecklistItem({ ok, label }: { ok: boolean; label: string }): JSX.Element {
   return (
-    <div>
-      <h2 className="text-lg font-semibold text-slate-900 mb-1">Entrar com login Gutty</h2>
-      <p className="text-sm text-slate-600 mb-5">
-        Use as mesmas credenciais que voce usa em{' '}
-        <code className="bg-slate-100 px-1 rounded text-xs">{ambiente.baseUrl}</code>.
-      </p>
-
-      <div className="space-y-3 mb-4">
-        <div>
-          <label className="block text-slate-700 text-xs font-medium mb-1">Nome / Login</label>
-          <input
-            type="text"
-            value={nome}
-            onChange={(e) => setNome(e.target.value)}
-            autoFocus
-            autoComplete="username"
-            className="w-full bg-white border-2 border-slate-200 focus:border-slate-900 outline-none rounded-md px-3 py-2 text-slate-900 transition"
-          />
-        </div>
-        <div>
-          <label className="block text-slate-700 text-xs font-medium mb-1">Senha</label>
-          <input
-            type="password"
-            value={senha}
-            onChange={(e) => setSenha(e.target.value)}
-            autoComplete="current-password"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void submit();
-            }}
-            className="w-full bg-white border-2 border-slate-200 focus:border-slate-900 outline-none rounded-md px-3 py-2 text-slate-900 transition"
-          />
-        </div>
-      </div>
-
-      {erro && (
-        <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded mb-4 text-sm">
-          {erro}
-        </div>
-      )}
-
-      <div className="flex gap-2">
-        <button
-          onClick={onVoltar}
-          disabled={carregando}
-          className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 rounded-md text-sm"
-        >
-          Voltar
-        </button>
-        <button
-          onClick={submit}
-          disabled={carregando || !nome || !senha}
-          className="flex-1 px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md font-semibold transition"
-        >
-          {carregando ? 'Entrando...' : 'Entrar e instalar'}
-        </button>
-      </div>
+    <div className="flex items-center gap-2 text-sm">
+      <span
+        className={[
+          'w-5 h-4 rounded flex items-center justify-center text-[9px] font-bold flex-shrink-0',
+          ok ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400',
+        ].join(' ')}
+        aria-hidden
+      >
+        {ok ? 'OK' : '—'}
+      </span>
+      <span className={ok ? 'text-slate-700' : 'text-slate-500'}>{label}</span>
     </div>
   );
 }
 
 function TelaInstalando({ progresso }: { progresso: ProgressoInstalacao | null }): JSX.Element {
-  const passos = ['Extrair', 'Config local', 'Certs + Servico', 'Iniciar', 'Validar'];
+  const passos = ['Limpeza', 'Extrair', 'Config', 'Certs+Servico', 'Iniciar', 'Validar'];
   const passoAtual = progresso?.passo ?? 0;
-  const pct = progresso ? (passoAtual / (progresso.total || 5)) * 100 : 0;
+  const pct = progresso ? (passoAtual / (progresso.total || 6)) * 100 : 0;
 
   return (
-    <div>
+    <Card>
       <h2 className="text-lg font-semibold text-slate-900 mb-1">Instalando agente local</h2>
-      <p className="text-sm text-slate-600 mb-6">Nao feche essa janela. Pode levar ~1 minuto.</p>
+      <p className="text-sm text-slate-600 mb-6">
+        Nao feche essa janela. Pode levar ~1 minuto. UAC pode pedir permissao.
+      </p>
 
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-2">
           {passos.map((p, idx) => {
-            const n = idx + 1;
+            const n = idx;
             return (
               <div key={p} className="flex items-center flex-1">
                 <div
@@ -397,7 +301,7 @@ function TelaInstalando({ progresso }: { progresso: ProgressoInstalacao | null }
                       : 'bg-slate-200 text-slate-500',
                   ].join(' ')}
                 >
-                  {n}
+                  {n + 1}
                 </div>
                 {idx < passos.length - 1 && (
                   <div
@@ -422,102 +326,16 @@ function TelaInstalando({ progresso }: { progresso: ProgressoInstalacao | null }
 
       <div className="bg-slate-100 rounded-md p-4 mb-2">
         <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
-          <div
-            className="h-full bg-slate-900 transition-all"
-            style={{ width: `${pct}%` }}
-          />
+          <div className="h-full bg-slate-900 transition-all" style={{ width: `${pct}%` }} />
         </div>
       </div>
 
       <p className="text-slate-700 text-sm">
-        {progresso?.label ?? 'Aguardando...'}
+        {progresso?.label ?? 'Iniciando...'}
         {progresso?.detalhe && (
           <span className="text-slate-500 ml-2 text-xs">{progresso.detalhe}</span>
         )}
       </p>
-    </div>
-  );
-}
-
-function TelaConcluido({
-  resultado,
-  config,
-  tenantId,
-  onReiniciar,
-}: {
-  resultado: InstalacaoResultado | null;
-  config: PairConfig | null;
-  tenantId: string | null;
-  onReiniciar: () => void;
-}): JSX.Element {
-  if (!resultado || resultado.ok) {
-    return (
-      <div>
-        <h2 className="text-xl font-semibold text-emerald-700 mb-2">Tudo pronto</h2>
-        <p className="text-slate-700 mb-5 leading-relaxed">
-          O agente Gutty TEF foi instalado e esta rodando como servico Windows.
-          Seu PDV web ja pode aceitar pagamentos por cartao.
-        </p>
-
-        <div className="bg-slate-50 border border-slate-200 rounded-md p-4 space-y-2 mb-5 text-sm">
-          <Linha k="Agente CliSiTef" v={resultado?.versaoAgente ?? '?'} />
-          <Linha k="DLL CliSiTef" v={resultado?.versaoClisitef ?? '?'} />
-          {config && (
-            <>
-              <Linha k="Servidor SiTef" v={config.sitefIp} />
-              <Linha k="Loja" v={config.storeId} mono />
-              <Linha k="Terminal" v={config.terminalId} mono />
-            </>
-          )}
-          <Linha k="Servico Windows" v="AgenteCliSiTef (autostart)" />
-          <Linha k="URL local" v="https://127.0.0.1/agente/clisitef" mono />
-        </div>
-
-        {tenantId && (
-          <p className="text-slate-500 text-xs mb-4">
-            Tenant: <code className="bg-slate-100 px-1 rounded">{tenantId}</code>
-          </p>
-        )}
-
-        <button
-          onClick={onReiniciar}
-          className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 rounded-md text-sm font-medium"
-        >
-          Voltar
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <h2 className="text-xl font-semibold text-red-700 mb-2">Falhou na instalacao</h2>
-      <p className="text-slate-700 mb-4">A configuracao nao pode ser concluida.</p>
-
-      <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-5">
-        <p className="text-red-800 text-sm font-mono whitespace-pre-wrap">{resultado.erro}</p>
-      </div>
-
-      <p className="text-slate-600 text-xs mb-4">
-        Voce pode tentar novamente. Se persistir, contate o suporte Gutty
-        (suporte@gutty.com.br) com o erro acima.
-      </p>
-
-      <button
-        onClick={onReiniciar}
-        className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-md text-sm font-semibold"
-      >
-        Tentar de novo
-      </button>
-    </div>
-  );
-}
-
-function Linha({ k, v, mono }: { k: string; v: string; mono?: boolean }): JSX.Element {
-  return (
-    <div className="flex justify-between gap-3">
-      <span className="text-slate-500">{k}</span>
-      <span className={`text-slate-900 ${mono ? 'font-mono text-xs' : ''}`}>{v}</span>
-    </div>
+    </Card>
   );
 }

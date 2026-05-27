@@ -8,6 +8,7 @@ import { configurarAgente } from './configure';
 import { gerarCertificadosEServico } from './certs';
 import { iniciarServico } from './service';
 import { validarAgente } from './validate';
+import { limparZumbis } from './reset';
 import type { InstalacaoResultado, PairConfig, ProgressoInstalacao } from '../shared-types';
 
 type EmitProgresso = (p: ProgressoInstalacao) => void;
@@ -35,6 +36,12 @@ export async function instalar(
 
   const TOTAL = 5;
   try {
+    // 0) Limpeza preventiva — mata processos zumbis e para servico atual.
+    // Sem isso, se ja existe instalacao parcial/quebrada, a DLL fica
+    // locked e os steps abaixo falham com erro confuso.
+    emit({ passo: 1, total: TOTAL, label: 'Limpando instancias anteriores do agente...' });
+    await limparZumbis();
+
     // 1) Localizar e extrair
     emit({ passo: 1, total: TOTAL, label: 'Localizando pacote do agente...' });
     const zip = localizarPayloadZip();

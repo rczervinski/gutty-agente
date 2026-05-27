@@ -49,6 +49,8 @@ PrivilegesRequiredOverridesAllowed=dialog
 
 OutputDir=..\bin
 OutputBaseFilename=GuttyAgenteSetup
+; Icone do executavel do setup (o .exe que o cliente baixa)
+SetupIconFile=..\renderer\assets\icon.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 LZMAUseSeparateProcess=yes
@@ -61,6 +63,10 @@ DisableWelcomePage=no
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
+; Mata o processo antigo antes de instalar/atualizar/desinstalar — senao
+; o .exe fica locked e o setup nao sobrescreve. Sem AppMutex (Electron
+; nao expoe API nativa de mutex), Inno mata via CloseApplications +
+; o nosso [InstallDelete]/[UninstallRun] com taskkill como cinto-e-suspensorio.
 CloseApplications=force
 RestartApplications=no
 MinVersion=10.0
@@ -77,7 +83,9 @@ Name: "autostart";   Description: "Iniciar o {#MyAppName} com o Windows"; GroupD
 Source: "LICENSE-placeholder.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}";              Filename: "{app}\{#MyAppExeName}"; Parameters: "--tray"
+; Atalhos abrem a JANELA (sem --tray). Autostart no boot do Windows usa
+; --tray (em [Registry] abaixo) pra subir minimizado.
+Name: "{group}\{#MyAppName}";              Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\Desinstalar {#MyAppName}";  Filename: "{uninstallexe}"
 Name: "{userdesktop}\{#MyAppName}";        Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
@@ -88,8 +96,15 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
   Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--tray"; Description: "Iniciar {#MyAppName}"; \
+; Pos-install: abre a JANELA visivel (sem --tray) pra usuario fazer
+; login. Autostart no boot do Windows continua sendo --tray (HKCU\Run).
+Filename: "{app}\{#MyAppExeName}"; Description: "Abrir {#MyAppName}"; \
   Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Mata o processo antes de remover arquivos no uninstall.
+Filename: "{cmd}"; Parameters: "/c taskkill /F /IM {#MyAppExeName} & exit /b 0"; \
+  Flags: runhidden; RunOnceId: "killguttyagente"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\resources"
@@ -182,6 +197,15 @@ begin
     if not FileExists(ZipPath) then
       RaiseException('Pacote nao foi baixado. Verifique sua conexao e tente novamente.');
 
+    // Mata processo antigo (cinto e suspensorio do CloseApplications) —
+    // se o GuttyAgente.exe estiver rodando na bandeja, fica locked
+    // e o CopyHere falha silenciosamente.
+    WizardForm.StatusLabel.Caption := 'Encerrando instancia anterior...';
+    Exec(ExpandConstant('{cmd}'),
+         '/c taskkill /F /IM {#MyAppExeName} >nul 2>nul & exit /b 0',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(500);
+
     WizardForm.StatusLabel.Caption := 'Extraindo pacote do Gutty Agente...';
 
     try
@@ -189,6 +213,13 @@ begin
     except
       RaiseException('Falha ao extrair pacote: ' + GetExceptionMessage);
     end;
+
+    // Verifica que o exe principal foi mesmo extraido. Se nao, aborta
+    // com mensagem clara em vez de deixar o [Run] gerar "CreateProcess
+    // falhou; codigo 2" depois.
+    if not FileExists(ExpandConstant('{app}\{#MyAppExeName}')) then
+      RaiseException('Extracao terminou mas {#MyAppExeName} nao foi encontrado em ' +
+                     ExpandConstant('{app}') + '. Conteudo do zip pode estar errado.');
 
     // Se o zip tinha uma subpasta raiz (GuttyAgente\), achata.
     if DirExists(ExpandConstant('{app}\GuttyAgente')) and

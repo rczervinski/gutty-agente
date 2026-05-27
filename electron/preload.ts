@@ -14,6 +14,8 @@ import type {
   PairErro,
   PairResultado,
   ProgressoInstalacao,
+  SessaoSnapshot,
+  StatusTefSnapshot,
 } from './shared-types';
 
 const bridge: GuttyBridge = {
@@ -40,6 +42,21 @@ const bridge: GuttyBridge = {
   autostartEstado: () => ipcRenderer.invoke('gutty:autostartEstado') as Promise<boolean>,
   autostartSet: (habilitar: boolean) =>
     ipcRenderer.invoke('gutty:autostartSet', habilitar) as Promise<boolean>,
+
+  sessaoAtual: () => ipcRenderer.invoke('gutty:sessaoAtual') as Promise<SessaoSnapshot | null>,
+  sessaoLogout: () => ipcRenderer.invoke('gutty:sessaoLogout') as Promise<void>,
+  sessaoLoginToken: (token, ambiente) =>
+    ipcRenderer.invoke('gutty:sessaoLoginToken', token, ambiente) as Promise<SessaoSnapshot | null>,
+  sessaoLoginGutty: (nome, senha, ambiente) =>
+    ipcRenderer.invoke('gutty:sessaoLoginGutty', nome, senha, ambiente) as Promise<
+      { ok: true; sessao: SessaoSnapshot } | { ok: false; erro: string }
+    >,
+  sessaoRecarregarConfig: () =>
+    ipcRenderer.invoke('gutty:sessaoRecarregarConfig') as Promise<SessaoSnapshot | null>,
+
+  tefStatus: () => ipcRenderer.invoke('gutty:tefStatus') as Promise<StatusTefSnapshot>,
+  tefReinstalar: (config: PairConfig, tenantId: string) =>
+    ipcRenderer.invoke('gutty:tefReinstalar', config, tenantId) as Promise<InstalacaoResultado>,
 };
 
 contextBridge.exposeInMainWorld('gutty', bridge);

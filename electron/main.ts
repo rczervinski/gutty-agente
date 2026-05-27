@@ -20,6 +20,9 @@ import type { AmbienteApi, PairConfig, ProgressoInstalacao } from './shared-type
 import { buscarConfigPosLogin, consumirToken, login } from './install/api';
 import { isAdmin } from './install/orquestrador';
 import { instalarComElevacao, processarFlagInstalacaoElevada } from './install/elevate';
+import { verificarStatusTef } from './install/status';
+import { apagarSessao, carregarSessao, salvarSessao, type SessaoGutty } from './session';
+import type { SessaoSnapshot } from './shared-types';
 import { criarTray, tudoQueremSair } from './tray';
 
 // =====================================================================
@@ -188,11 +191,92 @@ function registrarIpcHandlers(): void {
     const emit = (p: ProgressoInstalacao): void => {
       mainWindow?.webContents.send('gutty:progresso', p);
     };
-    // Se ja for admin, instala in-process. Caso contrario, eleva via UAC
-    // spawnando uma copia do GuttyAgente.exe com --install-tef. O dialog
-    // UAC aparece sem precisar fechar/reabrir o app.
-    return instalarComElevacao(config, tenantId, emit, isAdmin());
+    return instalarComElevacao(config, tenantId, emit, isAdmin(), false);
   });
+
+  // --- Sessao persistente ---
+  function snapshot(s: SessaoGutty | null): SessaoSnapshot | null {
+    if (!s) return null;
+    return {
+      ambiente: s.ambiente,
+      tenantId: s.tenantId,
+      nome: s.nome,
+      configTef: s.configTef,
+    };
+  }
+
+  ipcMain.handle('gutty:sessaoAtual', () => snapshot(carregarSessao()));
+
+  ipcMain.handle('gutty:sessaoLogout', () => {
+    apagarSessao();
+  });
+
+  ipcMain.handle(
+    'gutty:sessaoLoginToken',
+    async (_e, token: string, ambiente: AmbienteApi): Promise<SessaoSnapshot | null> => {
+      const r = await consumirToken(token, ambiente);
+      if (!r.ok) return null;
+      const sessao: SessaoGutty = {
+        ambiente,
+        tenantId: r.tenantId,
+        // No fluxo de token, nao temos JWT — so config. Marcamos com
+        // string vazia pra indicar "sessao via token, sem refetch".
+        authCookie: '',
+        configTef: r.config,
+        salvaEm: new Date().toISOString(),
+      };
+      salvarSessao(sessao);
+      return snapshot(sessao);
+    }
+  );
+
+  ipcMain.handle(
+    'gutty:sessaoLoginGutty',
+    async (_e, nome: string, senha: string, ambiente: AmbienteApi) => {
+      const l = await login(nome, senha, ambiente);
+      if (!l.ok) return { ok: false, erro: l.erro };
+      const c = await buscarConfigPosLogin(l.token, ambiente);
+      if (!c.ok) return { ok: false, erro: c.erro };
+      const sessao: SessaoGutty = {
+        ambiente,
+        tenantId: c.tenantId,
+        authCookie: l.token,
+        nome,
+        configTef: c.config,
+        salvaEm: new Date().toISOString(),
+      };
+      salvarSessao(sessao);
+      return { ok: true, sessao: snapshot(sessao)! };
+    }
+  );
+
+  ipcMain.handle('gutty:sessaoRecarregarConfig', async (): Promise<SessaoSnapshot | null> => {
+    const atual = carregarSessao();
+    if (!atual || !atual.authCookie) return snapshot(atual);
+    const c = await buscarConfigPosLogin(atual.authCookie, atual.ambiente);
+    if (!c.ok) return snapshot(atual);
+    const novo: SessaoGutty = {
+      ...atual,
+      tenantId: c.tenantId,
+      configTef: c.config,
+      salvaEm: new Date().toISOString(),
+    };
+    salvarSessao(novo);
+    return snapshot(novo);
+  });
+
+  // --- Diagnostico TEF ---
+  ipcMain.handle('gutty:tefStatus', async () => verificarStatusTef());
+
+  ipcMain.handle(
+    'gutty:tefReinstalar',
+    async (_e, config: PairConfig, tenantId: string) => {
+      const emit = (p: ProgressoInstalacao): void => {
+        mainWindow?.webContents.send('gutty:progresso', p);
+      };
+      return instalarComElevacao(config, tenantId, emit, isAdmin(), true);
+    }
+  );
 
   // --- Janela ---
   ipcMain.handle('gutty:minimizarPraTray', () => {

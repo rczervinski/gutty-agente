@@ -1,18 +1,20 @@
 /**
  * Valida que o agente CliSiTef esta ativo e respondendo via HTTPS local.
  *
- * O agente serve em https://127.0.0.1/agente/clisitef com cert self-signed
- * gerado na instalacao (DH 1024). Por isso:
- *   - rejectUnauthorized: false (cert nao confiavel pela CA do sistema)
- *   - minDHSize: 1024 (default do Node e 2048 — rejeita o cert do agente)
+ * Implementacao usando `electron.net` (stack HTTP do Chromium) em vez de
+ * `node:https`. Motivo: Electron 32 usa BoringSSL e tava lançando
+ *   error:1000009e:SSL routines:OPENSSL_internal:INVALID_COMMAND
+ * na hora do handshake com o cert self-signed do agente (DH 1024 / RSA 2048).
  *
- * IMPORTANTE: nao definir `ciphers` aqui. O Electron 32+ usa BoringSSL
- * (via Chromium) que NAO aceita tokens do OpenSSL classico tipo
- * "DEFAULT:@SECLEVEL=0" — joga error:1000009e:SSL
- * routines:OPENSSL_internal:INVALID_COMMAND. Deixar default funciona.
+ * electron.net resolve isso porque:
+ *   1. Usa o mesmo TLS stack do Chrome (mais permissivo que o Node puro)
+ *   2. Permite override do verify via session.setCertificateVerifyProc()
+ *      → aceitamos qualquer cert quando hostname e 127.0.0.1/localhost
+ *
+ * O agente serve em https://127.0.0.1/agente/clisitef.
  */
 
-import { request as httpsRequest } from 'node:https';
+import { net, session } from 'electron';
 import { URL } from 'node:url';
 import { AGENT_BASE_URL } from './paths';
 
@@ -24,46 +26,79 @@ export interface ValidacaoResultado {
   erro?: string;
 }
 
+let sessaoCfgFeita = false;
+function configurarSessaoLocalhost(): void {
+  if (sessaoCfgFeita) return;
+  // Aceita qualquer cert quando o host e local. Em tudo mais, deixa
+  // o Chromium aplicar a verificacao normal.
+  // Doc: https://www.electronjs.org/docs/latest/api/session#sessetcertificateverifyprocproc
+  session.defaultSession.setCertificateVerifyProc((req, cb) => {
+    if (req.hostname === '127.0.0.1' || req.hostname === 'localhost') {
+      cb(0); // 0 = aceito explicitamente
+    } else {
+      cb(-3); // -3 = usa default do Chromium
+    }
+  });
+  sessaoCfgFeita = true;
+}
+
 function httpsCall(
   urlStr: string,
   method: 'GET' | 'POST',
   body?: string
 ): Promise<{ status: number; body: string }> {
+  configurarSessaoLocalhost();
   return new Promise((resolve, reject) => {
     const u = new URL(urlStr);
-    const opts = {
-      protocol: u.protocol,
-      hostname: u.hostname,
-      port: u.port ? Number(u.port) : 443,
-      path: u.pathname + u.search,
+    const req = net.request({
       method,
-      rejectUnauthorized: false,
-      // DH params do agente sao 1024 bits — default do Node (2048) rejeita.
-      minDHSize: 1024,
-      timeout: 8000,
-      headers: body
-        ? {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Content-Length': Buffer.byteLength(body),
-          }
-        : undefined,
-    };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const req = httpsRequest(opts as any, (res) => {
-      let buf = '';
-      res.setEncoding('utf-8');
-      res.on('data', (d: string) => (buf += d));
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: buf }));
+      url: urlStr,
+      // session implicita = defaultSession (onde colocamos o verifyProc)
+      // useSessionCookies false (irrelevante pra agente)
     });
-    req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error('timeout')));
+
+    // Timeout manual (net.request nao tem opcao nativa).
+    const timeoutMs = 8000;
+    const timeoutTimer = setTimeout(() => {
+      req.abort();
+      reject(new Error(`timeout apos ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    if (body) {
+      req.setHeader('Content-Type', 'application/x-www-form-urlencoded');
+      req.setHeader('Content-Length', String(Buffer.byteLength(body)));
+    }
+
+    req.on('response', (response) => {
+      let buf = '';
+      response.on('data', (chunk: Buffer) => (buf += chunk.toString('utf-8')));
+      response.on('end', () => {
+        clearTimeout(timeoutTimer);
+        resolve({ status: response.statusCode, body: buf });
+      });
+      response.on('error', (e: Error) => {
+        clearTimeout(timeoutTimer);
+        reject(e);
+      });
+    });
+
+    req.on('error', (e) => {
+      clearTimeout(timeoutTimer);
+      reject(e);
+    });
+
     if (body) req.write(body);
     req.end();
+    // marca uso de URL parseada (evita warning de var nao usada)
+    void u;
   });
 }
 
+// Marker pra confirmar que esse codigo esta rodando (vs versao antiga em cache).
+const VALIDATE_VERSION = 'v2-electron-net';
+
 export async function validarAgente(): Promise<ValidacaoResultado> {
-  let last: ValidacaoResultado = { ok: false, erro: 'sem tentativa' };
+  let last: ValidacaoResultado = { ok: false, erro: `sem tentativa [${VALIDATE_VERSION}]` };
   for (let i = 0; i < 6; i++) {
     try {
       const r = await httpsCall(`${AGENT_BASE_URL}/state`, 'GET');
@@ -91,7 +126,8 @@ export async function validarAgente(): Promise<ValidacaoResultado> {
         }
       }
     } catch (e) {
-      last = { ok: false, erro: e instanceof Error ? e.message : String(e) };
+      const msg = e instanceof Error ? e.message : String(e);
+      last = { ok: false, erro: `${msg} [${VALIDATE_VERSION}]` };
     }
     await new Promise((r) => setTimeout(r, 1500));
   }

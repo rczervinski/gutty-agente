@@ -56,6 +56,35 @@ export interface InstalacaoResultado {
 }
 
 /**
+ * Snapshot da sessao gutty atual (enviada pro renderer).
+ * NAO contem authCookie cru por seguranca — fica isolado no main process.
+ */
+export interface SessaoSnapshot {
+  ambiente: AmbienteApi;
+  tenantId: string;
+  nome?: string;
+  configTef?: PairConfig;
+}
+
+/**
+ * Status real do TEF (diagnostico ortogonal).
+ */
+export interface StatusTefSnapshot {
+  tudoOk: boolean;
+  problemas: string[];
+  detalhes: {
+    pastaInstalada: boolean;
+    servicoExiste: boolean;
+    servicoRodando: boolean;
+    processosAtivos: number;
+    httpsResponde: boolean;
+    dllInicializada: boolean;
+    versaoAgente?: string;
+    versaoClisitef?: string;
+  };
+}
+
+/**
  * API exposta ao renderer via contextBridge.
  * Renderer chama: window.gutty.xxx().
  */
@@ -91,6 +120,28 @@ export interface GuttyBridge {
   autostartEstado(): Promise<boolean>;
   /** Liga/desliga autostart. Retorna o estado final. */
   autostartSet(habilitar: boolean): Promise<boolean>;
+
+  // --- Sessao persistente Gutty (login uma vez) ---
+  /** Sessao atual ou null. Carregada de safeStorage no boot. */
+  sessaoAtual(): Promise<SessaoSnapshot | null>;
+  /** Apaga sessao (logout) e zera estado in-memory. */
+  sessaoLogout(): Promise<void>;
+  /** Login com token de pareamento — salva sessao se sucesso. */
+  sessaoLoginToken(token: string, ambiente: AmbienteApi): Promise<SessaoSnapshot | null>;
+  /** Login com nome/senha — salva sessao se sucesso. */
+  sessaoLoginGutty(
+    nome: string,
+    senha: string,
+    ambiente: AmbienteApi
+  ): Promise<{ ok: true; sessao: SessaoSnapshot } | { ok: false; erro: string }>;
+  /** Refaz fetch da config TEF usando JWT salvo. */
+  sessaoRecarregarConfig(): Promise<SessaoSnapshot | null>;
+
+  // --- Diagnostico TEF ---
+  /** Verificacao ortogonal: servico + processo + HTTPS + cert. */
+  tefStatus(): Promise<StatusTefSnapshot>;
+  /** Reset completo + instalacao do zero. Eleva via UAC se preciso. */
+  tefReinstalar(config: PairConfig, tenantId: string): Promise<InstalacaoResultado>;
 }
 
 declare global {

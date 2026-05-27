@@ -6,9 +6,16 @@ export interface ExecResult {
   stderr: string;
 }
 
-export function exec(cmd: string, args: string[], opts: SpawnOptions = {}): Promise<ExecResult> {
+interface ExecOpts extends SpawnOptions {
+  /** Se true, nao loga warning quando code != 0. (Util pra taskkill/sc stop) */
+  ignoreErr?: boolean;
+}
+
+export function exec(cmd: string, args: string[], opts: ExecOpts = {}): Promise<ExecResult> {
+  const { ignoreErr: _ignoreErr, ...spawnOpts } = opts;
+  void _ignoreErr; // consumido — significa "callsite ja sabe que pode falhar"
   return new Promise((resolve) => {
-    const proc = spawn(cmd, args, { ...opts, shell: false });
+    const proc = spawn(cmd, args, { ...spawnOpts, shell: false });
     let stdout = '';
     let stderr = '';
     proc.stdout?.on('data', (d: Buffer) => (stdout += d.toString('utf-8')));
