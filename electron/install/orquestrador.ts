@@ -72,7 +72,7 @@ export async function instalar(
       };
     }
     emit({ passo: 2, total: TOTAL, label: 'Extraindo agente CliSiTef...', detalhe: zip });
-    const r1 = extrairAgente(zip);
+    const r1 = await extrairAgente(zip);
     emit({ passo: 2, total: TOTAL, label: `Extraido (${r1.arquivos} arquivos)` });
 
     // 3) Configurar

@@ -13,8 +13,9 @@
  * Roda como user (nao precisa admin pra LER status — apenas o reset+install).
  */
 
-import { existsSync } from 'node:fs';
-import { AGENT_EXE, INSTALL_DIR, SERVICE_NAME } from './paths';
+import { existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { AGENT_BIN, AGENT_EXE, INSTALL_DIR, SERVICE_NAME } from './paths';
 import { exec, pwsh } from './util';
 import { validarAgente } from './validate';
 
@@ -80,6 +81,10 @@ export async function verificarStatusTef(): Promise<StatusTef> {
   const problemas: string[] = [];
 
   const pastaInstalada = existsSync(AGENT_EXE);
+  const dllCliSiTefPath = join(AGENT_BIN, 'CliSiTef64I.dll');
+  const dllPresente = existsSync(dllCliSiTefPath);
+  const dllTamanho = dllPresente ? statSync(dllCliSiTefPath).size : 0;
+
   if (!pastaInstalada) {
     return {
       tudoOk: false,
@@ -97,6 +102,19 @@ export async function verificarStatusTef(): Promise<StatusTef> {
 
   const [{ existe: servicoExiste, rodando: servicoRodando }, processosAtivos, certOk] =
     await Promise.all([checarServico(), contarProcessos(), checarCert()]);
+
+  if (!dllPresente) {
+    problemas.push(
+      'CliSiTef64I.dll ausente em ' +
+        dllCliSiTefPath +
+        ' — sem ela o agente nao inicializa. Reinstale.'
+    );
+  } else if (dllTamanho < 1_000_000) {
+    problemas.push(
+      `CliSiTef64I.dll suspeitamente pequena (${dllTamanho} bytes — esperado >25MB). ` +
+        'Provavel extracao parcial. Reinstale.'
+    );
+  }
 
   if (!servicoExiste) problemas.push('Servico Windows "AgenteCliSiTef" nao existe');
   else if (!servicoRodando) problemas.push('Servico "AgenteCliSiTef" parado');
