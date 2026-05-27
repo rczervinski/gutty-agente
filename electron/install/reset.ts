@@ -14,7 +14,7 @@
  */
 
 import { existsSync, rmSync } from 'node:fs';
-import { AGENT_EXE, GUTTY_CONFIG_DIR, INSTALL_DIR, SERVICE_NAME } from './paths';
+import { AGENT_EXE, GUTTY_CONFIG_DIR, INSTALL_DIR, NSSM_INSTALLED, SERVICE_NAME } from './paths';
 import { exec } from './util';
 
 /**
@@ -42,20 +42,26 @@ export async function resetCompleto(
   };
 
   passo('Parando servico AgenteCliSiTef...');
+  // Tenta tanto via NSSM (se instalado) quanto via sc — qualquer um funciona.
+  if (existsSync(NSSM_INSTALLED)) {
+    await exec(NSSM_INSTALLED, ['stop', SERVICE_NAME], { ignoreErr: true });
+  }
   await exec('sc', ['stop', SERVICE_NAME], { ignoreErr: true });
   await new Promise((r) => setTimeout(r, 1500));
 
-  passo('Desinstalando servico (-u oficial)...');
+  passo('Removendo servico (via NSSM ou sc delete)...');
+  if (existsSync(NSSM_INSTALLED)) {
+    await exec(NSSM_INSTALLED, ['remove', SERVICE_NAME, 'confirm'], { ignoreErr: true });
+  }
+  // Tenta `-u` oficial como fallback (instalacoes antigas que usavam o modo SE)
   if (existsSync(AGENT_EXE)) {
     await exec(AGENT_EXE, ['-u'], { ignoreErr: true });
-    await new Promise((r) => setTimeout(r, 1500));
   }
-
-  passo('Force-delete do servico (sc delete)...');
   await exec('sc', ['delete', SERVICE_NAME], { ignoreErr: true });
 
   passo('Matando processos zumbis...');
   await exec('taskkill', ['/F', '/IM', 'agenteCliSiTef.exe', '/T'], { ignoreErr: true });
+  await exec('taskkill', ['/F', '/IM', 'nssm.exe', '/T'], { ignoreErr: true });
 
   passo('Removendo CA Gutty TEF do trust root...');
   await exec(

@@ -8,7 +8,15 @@
 
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
-import { AGENT_BIN, AGENT_EXE, AGENT_HELPER } from './paths';
+import {
+  AGENT_BIN,
+  AGENT_DIR,
+  AGENT_EXE,
+  AGENT_HELPER,
+  NSSM_INSTALLED,
+  nssmSourcePath,
+  SERVICE_NAME,
+} from './paths';
 import { exec } from './util';
 
 const OPENSSL_CANDIDATES = [
@@ -127,22 +135,84 @@ export async function gerarCertificadosEServico(progresso: ProgressoCerts): Prom
     if (r2.code !== 0) throw new Error(`certutil falhou: ${r2.stderr || r2.stdout}`);
   }
 
-  progresso(8, TOTAL, 'Registrando serviço Windows AgenteCliSiTef...');
+  // ===================================================================
+  //  Passo 8: registrar servico Windows via NSSM
+  // ===================================================================
+  //
+  //  Antes usavamos `agenteCliSiTef.exe -i` (recomendacao SE), mas esse
+  //  exe NAO implementa Service Control Handler corretamente — ele sobe
+  //  HTTPS, faz fork, parent sai, SCM mata o processo como STOPPED e
+  //  workers ficam orfaos. Resultado: "2 processos zumbi" em todas as
+  //  instalacoes, servico jamais RUNNING.
+  //
+  //  NSSM (Non-Sucking Service Manager, MIT) wrappa qualquer .exe num
+  //  servico Windows funcional: trata Service Control Handler direito,
+  //  mantem o processo vivo, restarta se cair, redireciona stdout/err.
+  //
+  //  Doc: https://nssm.cc/usage
+  // ===================================================================
+  progresso(8, TOTAL, 'Registrando servico Windows via NSSM...');
   if (!existsSync(AGENT_EXE)) throw new Error(`agenteCliSiTef.exe ausente: ${AGENT_EXE}`);
-  const r = await exec(AGENT_EXE, ['-i']);
-  if (r.code !== 0) throw new Error(`agenteCliSiTef.exe -i falhou (${r.code})\n${r.stderr || r.stdout}`);
 
-  // CRITICO: o `-i` da SE alem de registrar o servico no SCM, deixa um
-  // processo "console" do agenteCliSiTef.exe rodando. Esse processo
-  // depois disputa a porta 443 com o servico que vamos iniciar, e o
-  // servico nao consegue bindar -> STOPPED. Mata tudo agora pra o sc start
-  // ter o terreno limpo.
-  await exec('taskkill', ['/F', '/IM', 'agenteCliSiTef.exe', '/T'], {
+  // Copia nssm.exe pro bin do agente (vamos invocar via path absoluto)
+  if (!existsSync(NSSM_INSTALLED)) {
+    copyFileSync(nssmSourcePath(), NSSM_INSTALLED);
+  }
+
+  // Pasta de logs do NSSM
+  const logsDir = join(AGENT_DIR, 'logs');
+  mkdirSync(logsDir, { recursive: true });
+  const nssmStdout = join(logsDir, 'nssm-stdout.log');
+  const nssmStderr = join(logsDir, 'nssm-stderr.log');
+
+  // 1) Garantir que servico nao exista (cleanup defensive)
+  await exec(NSSM_INSTALLED, ['stop', SERVICE_NAME], { ignoreErr: true });
+  await exec(NSSM_INSTALLED, ['remove', SERVICE_NAME, 'confirm'], { ignoreErr: true });
+  await exec('sc.exe', ['delete', SERVICE_NAME], { ignoreErr: true });
+  await exec('taskkill', ['/F', '/IM', 'agenteCliSiTef.exe', '/T'], { ignoreErr: true });
+
+  // 2) Registrar via NSSM (sintaxe: nssm install <nome> <exe> [args...])
+  // Importante: NAO passamos /s — esse modo e que esta bugado na SE.
+  // NSSM mantem o processo vivo em modo console.
+  const inst = await exec(NSSM_INSTALLED, ['install', SERVICE_NAME, AGENT_EXE], {
+    ignoreErr: true,
+  });
+  if (inst.code !== 0) {
+    throw new Error(`nssm install falhou (${inst.code})\n${inst.stderr || inst.stdout}`);
+  }
+
+  // 3) Configurar NSSM
+  // AppDirectory = onde o processo deve rodar (CWD). Critico porque o
+  // agente usa paths relativos pra carregar DLLs/certs.
+  await exec(NSSM_INSTALLED, ['set', SERVICE_NAME, 'AppDirectory', AGENT_BIN], { ignoreErr: true });
+  await exec(NSSM_INSTALLED, ['set', SERVICE_NAME, 'AppStdout', nssmStdout], { ignoreErr: true });
+  await exec(NSSM_INSTALLED, ['set', SERVICE_NAME, 'AppStderr', nssmStderr], { ignoreErr: true });
+
+  // Restart automatico em caso de crash (NSSM cuida disso, nao o SCM)
+  await exec(NSSM_INSTALLED, ['set', SERVICE_NAME, 'AppExit', 'Default', 'Restart'], {
+    ignoreErr: true,
+  });
+  await exec(NSSM_INSTALLED, ['set', SERVICE_NAME, 'AppRestartDelay', '5000'], { ignoreErr: true });
+
+  // Roda como LocalSystem (default), auto-start no boot
+  await exec(NSSM_INSTALLED, ['set', SERVICE_NAME, 'Start', 'SERVICE_AUTO_START'], {
     ignoreErr: true,
   });
 
-  // Garante auto-start no boot do Windows + tipo de servico correto.
-  await exec('sc.exe', ['config', 'AgenteCliSiTef', 'start=', 'auto'], { ignoreErr: true });
+  // Display name + descricao
+  await exec(NSSM_INSTALLED, ['set', SERVICE_NAME, 'DisplayName', 'Gutty Agente TEF (CliSiTef)'], {
+    ignoreErr: true,
+  });
+  await exec(
+    NSSM_INSTALLED,
+    [
+      'set',
+      SERVICE_NAME,
+      'Description',
+      'Agente CliSiTef oficial gerenciado via NSSM. Conecta o PDV web Gutty ao pinpad fisico.',
+    ],
+    { ignoreErr: true }
+  );
 
   return { opensslPath };
 }

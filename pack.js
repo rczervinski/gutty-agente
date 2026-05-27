@@ -98,6 +98,18 @@ for (const f of payloadFiles) {
   console.log(`  payload copiado: ${f}`);
 }
 
+// Copia nssm.exe (wrapper de servico Windows). MIT, ~340KB.
+// O agente CliSiTef da SE nao implementa Service Control Handler do
+// Windows direito (sobe HTTPS, faz fork, parent sai, SCM mata). NSSM
+// resolve isso wrappendo o exe num servico Windows funcional.
+const NSSM_SRC = path.join(PAYLOAD_SRC, 'nssm.exe');
+if (fs.existsSync(NSSM_SRC)) {
+  fs.copyFileSync(NSSM_SRC, path.join(RES_PAYLOAD, 'nssm.exe'));
+  console.log('  payload copiado: nssm.exe');
+} else {
+  console.warn('  AVISO: nssm.exe NAO encontrado em assets/payload/. Servico Windows nao vai funcionar.');
+}
+
 // Remove locales nao-pt-br pra economizar ~30-50MB no zip final.
 // O Electron mantem en-US por default; vamos limpar tudo menos pt-BR e en-US.
 const LOCALES = path.join(PACK_DIR, 'locales');
