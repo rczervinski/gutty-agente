@@ -132,5 +132,17 @@ export async function gerarCertificadosEServico(progresso: ProgressoCerts): Prom
   const r = await exec(AGENT_EXE, ['-i']);
   if (r.code !== 0) throw new Error(`agenteCliSiTef.exe -i falhou (${r.code})\n${r.stderr || r.stdout}`);
 
+  // CRITICO: o `-i` da SE alem de registrar o servico no SCM, deixa um
+  // processo "console" do agenteCliSiTef.exe rodando. Esse processo
+  // depois disputa a porta 443 com o servico que vamos iniciar, e o
+  // servico nao consegue bindar -> STOPPED. Mata tudo agora pra o sc start
+  // ter o terreno limpo.
+  await exec('taskkill', ['/F', '/IM', 'agenteCliSiTef.exe', '/T'], {
+    ignoreErr: true,
+  });
+
+  // Garante auto-start no boot do Windows + tipo de servico correto.
+  await exec('sc.exe', ['config', 'AgenteCliSiTef', 'start=', 'auto'], { ignoreErr: true });
+
   return { opensslPath };
 }

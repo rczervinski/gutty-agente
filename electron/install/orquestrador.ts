@@ -1,14 +1,21 @@
 /**
  * Orquestrador da instalação. Coordena todos os steps emitindo progresso.
+ *
+ * No final, chama garantirSaudeAgente() que faz auto-correcao se sobrou
+ * algum zumbi ou o servico parou — so retorna ok=true se TUDO esta verde
+ * (excecao: DLL nao inicializada por falta de servidor SiTef externo,
+ * o que nao e responsabilidade da instalacao resolver).
  */
 
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { extrairAgente, localizarPayloadZip } from './extract';
 import { configurarAgente } from './configure';
 import { gerarCertificadosEServico } from './certs';
 import { iniciarServico } from './service';
-import { validarAgente } from './validate';
-import { limparZumbis } from './reset';
+import { limparZumbis, resetCompleto } from './reset';
+import { garantirSaudeAgente, gerarMensagemErro } from './garantir-saude';
+import { INSTALL_DIR } from './paths';
 import type { InstalacaoResultado, PairConfig, ProgressoInstalacao } from '../shared-types';
 
 type EmitProgresso = (p: ProgressoInstalacao) => void;
@@ -34,57 +41,83 @@ export async function instalar(
   // elevate.ts (instalarComElevacao). Quando este orquestrador roda,
   // ele *ja* esta no contexto elevado (ou o app foi aberto como admin).
 
-  const TOTAL = 5;
+  const TOTAL = 6;
   try {
-    // 0) Limpeza preventiva — mata processos zumbis e para servico atual.
-    // Sem isso, se ja existe instalacao parcial/quebrada, a DLL fica
-    // locked e os steps abaixo falham com erro confuso.
-    emit({ passo: 1, total: TOTAL, label: 'Limpando instancias anteriores do agente...' });
-    await limparZumbis();
+    // 1) Limpeza preventiva. Se ja existe pasta de instalacao, faz reset
+    // COMPLETO (apaga servico, pasta, cert) — instalacao anterior pode
+    // estar corrompida e provavelmente foi o motivo do user clicar
+    // "Instalar" de novo. Comecar do zero e mais seguro.
+    if (existsSync(INSTALL_DIR)) {
+      emit({
+        passo: 1,
+        total: TOTAL,
+        label: 'Detectada instalacao anterior — fazendo reset completo...',
+      });
+      await resetCompleto((label, detalhe) =>
+        emit({ passo: 1, total: TOTAL, label, detalhe })
+      );
+    } else {
+      emit({ passo: 1, total: TOTAL, label: 'Limpando processos do agente...' });
+      await limparZumbis();
+    }
 
-    // 1) Localizar e extrair
-    emit({ passo: 1, total: TOTAL, label: 'Localizando pacote do agente...' });
+    // 2) Localizar e extrair
+    emit({ passo: 2, total: TOTAL, label: 'Localizando pacote do agente...' });
     const zip = localizarPayloadZip();
     if (!zip) {
       return {
         ok: false,
-        erro: 'Pacote do agente não encontrado em assets/payload/. Em prod ele vem embutido nos resources do Electron.',
+        erro:
+          'Pacote do agente nao encontrado em assets/payload/. Em prod ele vem embutido nos resources do Electron.',
       };
     }
-    emit({ passo: 1, total: TOTAL, label: 'Extraindo agente CliSiTef...', detalhe: zip });
+    emit({ passo: 2, total: TOTAL, label: 'Extraindo agente CliSiTef...', detalhe: zip });
     const r1 = extrairAgente(zip);
-    emit({ passo: 1, total: TOTAL, label: `Extraído (${r1.arquivos} arquivos)` });
+    emit({ passo: 2, total: TOTAL, label: `Extraido (${r1.arquivos} arquivos)` });
 
-    // 2) Configurar
-    emit({ passo: 2, total: TOTAL, label: 'Escrevendo configuração local...' });
+    // 3) Configurar
+    emit({ passo: 3, total: TOTAL, label: 'Escrevendo configuracao local...' });
     await configurarAgente(config, tenantId);
-    emit({ passo: 2, total: TOTAL, label: 'Configuração gravada (DPAPI)' });
+    emit({ passo: 3, total: TOTAL, label: 'Configuracao gravada (DPAPI)' });
 
-    // 3) Certificados + serviço (8 sub-passos)
-    emit({ passo: 3, total: TOTAL, label: 'Gerando certificados SSL...' });
+    // 4) Certificados + servico
+    emit({ passo: 4, total: TOTAL, label: 'Gerando certificados SSL...' });
     await gerarCertificadosEServico((s, t, label) => {
-      emit({ passo: 3, total: TOTAL, label: `Certificados ${s}/${t}: ${label}` });
+      emit({ passo: 4, total: TOTAL, label: `Certificados ${s}/${t}: ${label}` });
     });
-    emit({ passo: 3, total: TOTAL, label: 'Certificados + serviço prontos' });
+    emit({ passo: 4, total: TOTAL, label: 'Certificados + servico prontos' });
 
-    // 4) Iniciar serviço
-    emit({ passo: 4, total: TOTAL, label: 'Iniciando serviço AgenteCliSiTef...' });
-    await iniciarServico();
-    emit({ passo: 4, total: TOTAL, label: 'Serviço rodando' });
-
-    // 5) Validar
-    emit({ passo: 5, total: TOTAL, label: 'Validando comunicação HTTPS local...' });
-    const v = await validarAgente();
-    if (!v.ok) {
-      return { ok: false, erro: `Agente não respondeu: ${v.erro}` };
+    // 5) Iniciar servico (best-effort — se nao subir aqui, garantirSaude resolve)
+    emit({ passo: 5, total: TOTAL, label: 'Iniciando servico AgenteCliSiTef...' });
+    try {
+      await iniciarServico();
+    } catch (e) {
+      emit({
+        passo: 5,
+        total: TOTAL,
+        label: 'Servico nao subiu na primeira — vou tentar recuperar...',
+        detalhe: e instanceof Error ? e.message : String(e),
+      });
     }
-    emit({ passo: 5, total: TOTAL, label: 'Validação OK' });
+
+    // 6) Garantir saude — loop de auto-correcao
+    emit({ passo: 6, total: TOTAL, label: 'Verificando saude completa do agente...' });
+    const status = await garantirSaudeAgente((label, detalhe) =>
+      emit({ passo: 6, total: TOTAL, label, detalhe })
+    );
+
+    if (!status.detalhes.httpsResponde) {
+      const erro = await gerarMensagemErro(status);
+      return { ok: false, erro };
+    }
+
+    emit({ passo: 6, total: TOTAL, label: 'Agente saudavel' });
 
     return {
       ok: true,
-      versaoAgente: v.serviceVersion,
-      versaoClisitef: v.clisitefVersion,
-      pinpadDetectado: v.pinpadPresente,
+      versaoAgente: status.detalhes.versaoAgente,
+      versaoClisitef: status.detalhes.versaoClisitef,
+      pinpadDetectado: false,
     };
   } catch (e) {
     return { ok: false, erro: e instanceof Error ? e.message : 'erro desconhecido' };
